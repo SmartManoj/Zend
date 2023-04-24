@@ -5294,8 +5294,8 @@
     <string name="chatFullDate">MMMM d, yyyy</string>
     <string name="formatterWeek">EEE</string>
     <string name="formatterWeekLong">EEEE</string>
-    <string name="formatterDay24H">HH:mm:ss</string>
-    <string name="formatterDay12H">h:mm:ss a</string>
+    <string name="formatterDay24H">HH:mm</string>
+    <string name="formatterDay12H">h:mm a</string>
     <string name="formatDateAtTime">%1$s at %2$s</string>
     <string name="formatDateSchedule">MMM d</string>
     <string name="formatDateScheduleYear">MMM d yyyy</string>
