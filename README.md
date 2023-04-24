@@ -1,5 +1,11 @@
-## Telegram messenger for Android
+## Zend messenger for Android
+Introducing Zend Messenger - a Telegram app tweaked by ChatGPT. With Zend Messenger, users can now experience an enhanced Telegram experience, complete with the ability to display seconds in the timestamp of messages.
 
+We are proud to present the new "Show Seconds" feature, a simple yet significant addition that emphasizes the importance of every single second. Time is the most precious resource we have, and each second is invaluable as it carries the potential to create, innovate, and connect. By making users aware of each passing moment, Zend Messenger encourages you to utilize your time effectively and make the most of every second.
+
+The "Show Seconds" update is more than just a convenience; it's a reminder that time is fleeting, and we should cherish and utilize each moment to its fullest potential. With Zend Messenger's latest enhancement, you can stay organized, maintain your focus, and never lose sight of the significance of every second. Embrace the importance of time with Zend Messenger - your enhanced Telegram experience begins now.
+
+## Telegram messenger for Android
 [Telegram](https://telegram.org) is a messaging app with a focus on speed and security. It’s superfast, simple and free.
 This repo contains the official source code for [Telegram App for Android](https://play.google.com/store/apps/details?id=org.telegram.messenger).
 
