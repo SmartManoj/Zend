@@ -1,0 +1,126 @@
+{
+  "project_info": {
+    "project_number": "620015110218",
+    "project_id": "zend-fa22d",
+    "storage_bucket": "zend-fa22d.appspot.com"
+  },
+  "client": [
+    {
+      "client_info": {
+        "mobilesdk_app_id": "1:620015110218:android:0f9ecacfdba7eb3575beb3",
+        "android_client_info": {
+          "package_name": "org.telegram.messenger"
+        }
+      },
+      "oauth_client": [
+        {
+          "client_id": "620015110218-h002i5rntutce293cg6pg6kajkq9mfvt.apps.googleusercontent.com",
+          "client_type": 3
+        }
+      ],
+      "api_key": [
+        {
+          "current_key": "AIzaSyDjzy219indblBhXqGwUUvfIJntohb4CBc"
+        }
+      ],
+      "services": {
+        "appinvite_service": {
+          "other_platform_oauth_client": [
+            {
+              "client_id": "620015110218-h002i5rntutce293cg6pg6kajkq9mfvt.apps.googleusercontent.com",
+              "client_type": 3
+            }
+          ]
+        }
+      }
+    },
+    {
+      "client_info": {
+        "mobilesdk_app_id": "1:620015110218:android:1364acc04cb5b0cb75beb3",
+        "android_client_info": {
+          "package_name": "org.telegram.messenger.beta"
+        }
+      },
+      "oauth_client": [
+        {
+          "client_id": "620015110218-h002i5rntutce293cg6pg6kajkq9mfvt.apps.googleusercontent.com",
+          "client_type": 3
+        }
+      ],
+      "api_key": [
+        {
+          "current_key": "AIzaSyDjzy219indblBhXqGwUUvfIJntohb4CBc"
+        }
+      ],
+      "services": {
+        "appinvite_service": {
+          "other_platform_oauth_client": [
+            {
+              "client_id": "620015110218-h002i5rntutce293cg6pg6kajkq9mfvt.apps.googleusercontent.com",
+              "client_type": 3
+            }
+          ]
+        }
+      }
+    },
+    {
+      "client_info": {
+        "mobilesdk_app_id": "1:620015110218:android:8a36d875ddd842cb75beb3",
+        "android_client_info": {
+          "package_name": "org.telegram.zend"
+        }
+      },
+      "oauth_client": [
+        {
+          "client_id": "620015110218-h002i5rntutce293cg6pg6kajkq9mfvt.apps.googleusercontent.com",
+          "client_type": 3
+        }
+      ],
+      "api_key": [
+        {
+          "current_key": "AIzaSyDjzy219indblBhXqGwUUvfIJntohb4CBc"
+        }
+      ],
+      "services": {
+        "appinvite_service": {
+          "other_platform_oauth_client": [
+            {
+              "client_id": "620015110218-h002i5rntutce293cg6pg6kajkq9mfvt.apps.googleusercontent.com",
+              "client_type": 3
+            }
+          ]
+        }
+      }
+    },
+    {
+      "client_info": {
+        "mobilesdk_app_id": "1:620015110218:android:cf551e22502535cb75beb3",
+        "android_client_info": {
+          "package_name": "org.telegram.zend.beta"
+        }
+      },
+      "oauth_client": [
+        {
+          "client_id": "620015110218-h002i5rntutce293cg6pg6kajkq9mfvt.apps.googleusercontent.com",
+          "client_type": 3
+        }
+      ],
+      "api_key": [
+        {
+          "current_key": "AIzaSyDjzy219indblBhXqGwUUvfIJntohb4CBc"
+        }
+      ],
+      "services": {
+        "appinvite_service": {
+          "other_platform_oauth_client": [
+            {
+              "client_id": "620015110218-h002i5rntutce293cg6pg6kajkq9mfvt.apps.googleusercontent.com",
+              "client_type": 3
+            }
+          ]
+        }
+      }
+    }
+  ],
+  "configuration_version": "1"
+}

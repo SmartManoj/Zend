@@ -3,9 +3,4 @@
 build/
 obj/
 *.iml
-local.properties
-TMessagesProj/.cxx/
-TMessagesProj_App/afat/
-gradle.properties
-TMessagesProj/config/release.keystore
-TMessagesProj/google-services.json
+libtgcalls.a

@@ -1,0 +1,7 @@
+Executable : C:\Users\smart\AppData\Local\Android\Sdk\cmake\3.10.2.4988404\bin\ninja.exe
+arguments : 
+-C
+C:\Users\smart\Documents\Telegram\TMessagesProj\.cxx\Debug\s2m5g26a\armeabi-v7a
+tmessages.44
+jvmArgs : 
+

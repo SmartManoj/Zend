@@ -1,0 +1,2 @@
+ninja: Entering directory `C:\Users\smart\Documents\Telegram\TMessagesProj\.cxx\Debug\s2m5g26a\arm64-v8a'
+ninja: no work to do.
