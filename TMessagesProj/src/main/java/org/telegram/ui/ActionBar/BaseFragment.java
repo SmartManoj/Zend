@@ -17,6 +17,7 @@ import android.content.Intent;
 import android.content.SharedPreferences;
 import android.graphics.Canvas;
 import android.graphics.Color;
+import android.graphics.Paint;
 import android.graphics.drawable.Drawable;
 import android.os.Build;
 import android.os.Bundle;
@@ -52,17 +53,19 @@ import org.telegram.messenger.SendMessagesHelper;
 import org.telegram.messenger.UserConfig;
 import org.telegram.tgnet.ConnectionsManager;
 import org.telegram.ui.Components.LayoutHelper;
+import org.telegram.ui.LaunchActivity;
+import org.telegram.ui.Stories.StoryViewer;
 
 import java.util.ArrayList;
 
 public abstract class BaseFragment {
 
-    private boolean isFinished;
+    protected boolean isFinished;
     protected boolean finishing;
-    protected Dialog visibleDialog;
+    public Dialog visibleDialog;
     protected int currentAccount = UserConfig.selectedAccount;
 
-    protected View fragmentView;
+    public View fragmentView;
     protected INavigationLayout parentLayout;
     protected ActionBar actionBar;
     protected boolean inPreviewMode;
@@ -77,6 +80,32 @@ public abstract class BaseFragment {
     protected boolean fragmentBeginToShow;
     private boolean removingFromStack;
     private PreviewDelegate previewDelegate;
+    protected Theme.ResourcesProvider resourceProvider;
+    public ArrayList<StoryViewer> storyViewerStack;
+
+    public StoryViewer getLastStoryViewer() {
+        if (storyViewerStack == null || storyViewerStack.isEmpty())
+            return null;
+        for (int i = storyViewerStack.size() - 1; i >= 0; --i) {
+            if (storyViewerStack.get(i).isShown()) {
+                return storyViewerStack.get(i);
+            }
+        }
+        return null;
+    }
+
+    public boolean hasStoryViewer() {
+        return storyViewerStack != null && !storyViewerStack.isEmpty();
+    }
+
+    public void clearStoryViewers() {
+        if (storyViewerStack == null || storyViewerStack.isEmpty())
+            return;
+        for (int i = storyViewerStack.size() - 1; i >= 0; --i) {
+            storyViewerStack.get(i).release();
+        }
+        storyViewerStack.clear();
+    }
 
     public BaseFragment() {
         classGuid = ConnectionsManager.generateClassGuid();
@@ -208,6 +237,7 @@ public abstract class BaseFragment {
             }
             actionBar = null;
         }
+        clearStoryViewers();
         parentLayout = null;
     }
 
@@ -236,6 +266,7 @@ public abstract class BaseFragment {
                 }
                 if (parentLayout != null && parentLayout.getView().getContext() != fragmentView.getContext()) {
                     fragmentView = null;
+                    clearStoryViewers();
                 }
             }
             if (actionBar != null) {
@@ -367,6 +398,13 @@ public abstract class BaseFragment {
     @CallSuper
     public void onResume() {
         isPaused = false;
+        if (actionBar != null) {
+            actionBar.onResume();
+        }
+        if (getLastStoryViewer() != null) {
+            getLastStoryViewer().onResume();
+            getLastStoryViewer().updatePlayingMode();
+        }
     }
 
     @CallSuper
@@ -383,6 +421,10 @@ public abstract class BaseFragment {
         } catch (Exception e) {
             FileLog.e(e);
         }
+        if (getLastStoryViewer() != null) {
+            getLastStoryViewer().onPause();
+            getLastStoryViewer().updatePlayingMode();
+        }
     }
 
     public void setPaused(boolean paused) {
@@ -397,6 +439,10 @@ public abstract class BaseFragment {
         }
     }
 
+    public boolean isPaused() {
+        return isPaused;
+    }
+
     public BaseFragment getFragmentForAlert(int offset) {
         if (parentLayout == null || parentLayout.getFragmentStack().size() <= 1 + offset) {
             return this;
@@ -409,7 +455,21 @@ public abstract class BaseFragment {
     }
 
     public boolean onBackPressed() {
+        if (closeStoryViewer()) {
+            return false;
+        }
         return true;
+    }
+
+    public boolean closeStoryViewer() {
+        if (storyViewerStack != null) {
+            for (int i = storyViewerStack.size() - 1; i >= 0; --i) {
+                if (storyViewerStack.get(i).isShown()) {
+                    return storyViewerStack.get(i).onBackPressed();
+                }
+            }
+        }
+        return false;
     }
 
     public void onActivityResultFragment(int requestCode, int resultCode, Intent data) {
@@ -592,6 +652,14 @@ public abstract class BaseFragment {
         if (dialog == null || parentLayout == null || parentLayout.isTransitionAnimationInProgress() || parentLayout.isSwipeInProgress() || !allowInTransition && parentLayout.checkTransitionAnimation()) {
             return null;
         }
+        if (storyViewerStack != null) {
+            for (int i = storyViewerStack.size() - 1; i >= 0; --i) {
+                if (storyViewerStack.get(i).isShown()) {
+                    storyViewerStack.get(i).showDialog(dialog);
+                    return dialog;
+                }
+            }
+        }
         try {
             if (visibleDialog != null) {
                 visibleDialog.dismiss();
@@ -743,24 +811,67 @@ public abstract class BaseFragment {
     }
 
     public INavigationLayout[] showAsSheet(BaseFragment fragment) {
+        return showAsSheet(fragment, null);
+    }
+
+    public INavigationLayout[] showAsSheet(BaseFragment fragment, BottomSheetParams params) {
         if (getParentActivity() == null) {
             return null;
         }
-        INavigationLayout[] actionBarLayout = new INavigationLayout[]{INavigationLayout.newLayout(getParentActivity())};
-        BottomSheet bottomSheet = new BottomSheet(getParentActivity(), true) {
+        BottomSheet[] bottomSheet = new BottomSheet[1];
+        INavigationLayout[] actionBarLayout = new INavigationLayout[]{INavigationLayout.newLayout(getParentActivity(), () -> bottomSheet[0])};
+        actionBarLayout[0].setIsSheet(true);
+        LaunchActivity.instance.sheetFragmentsStack.add(actionBarLayout[0]);
+        fragment.onTransitionAnimationStart(true, false);
+        bottomSheet[0] = new BottomSheet(getParentActivity(), true, fragment.getResourceProvider()) {
             {
+                occupyNavigationBar = params != null && params.occupyNavigationBar;
+                drawNavigationBar = !occupyNavigationBar;
                 actionBarLayout[0].setFragmentStack(new ArrayList<>());
                 actionBarLayout[0].addFragmentToStack(fragment);
                 actionBarLayout[0].showLastFragment();
                 actionBarLayout[0].getView().setPadding(backgroundPaddingLeft, 0, backgroundPaddingLeft, 0);
-                containerView = actionBarLayout[0].getView();
+                ViewGroup view = actionBarLayout[0].getView();
+                containerView = view;
                 setApplyBottomPadding(false);
-                setApplyBottomPadding(false);
-                setOnDismissListener(dialog -> fragment.onFragmentDestroy());
+                setOnDismissListener(dialog -> {
+                    fragment.onPause();
+                    fragment.onFragmentDestroy();
+                    if (params != null && params.onDismiss != null) {
+                        params.onDismiss.run();
+                    }
+                });
+            }
+
+            @Override
+            protected void onCreate(Bundle savedInstanceState) {
+                super.onCreate(savedInstanceState);
+                actionBarLayout[0].setWindow(bottomSheet[0].getWindow());
+                if (params == null || !params.occupyNavigationBar) {
+                    fixNavigationBar(Theme.getColor(Theme.key_dialogBackgroundGray, fragment.getResourceProvider()));
+                } else {
+                    AndroidUtilities.setLightNavigationBar(bottomSheet[0].getWindow(), true);
+                }
+                AndroidUtilities.setLightStatusBar(getWindow(), fragment.isLightStatusBar());
+                fragment.onBottomSheetCreated();
             }
 
             @Override
             protected boolean canDismissWithSwipe() {
+                return false;
+            }
+
+            @Override
+            protected boolean canSwipeToBack(MotionEvent event) {
+                if (params != null && params.transitionFromLeft && actionBarLayout[0] != null && actionBarLayout[0].getFragmentStack().size() <= 1) {
+                    if (actionBarLayout[0].getFragmentStack().size() == 1) {
+                        BaseFragment lastFragment = actionBarLayout[0].getFragmentStack().get(0);
+                        if (!lastFragment.isSwipeBackEnabled(event)) {
+                            return false;
+                        }
+                    }
+                    return true;
+                }
                 return false;
             }
 
@@ -775,17 +886,53 @@ public abstract class BaseFragment {
 
             @Override
             public void dismiss() {
+                if (!isDismissed()) {
+                    if (params != null && params.onPreFinished != null) {
+                        params.onPreFinished.run();
+                    }
+                }
                 super.dismiss();
+                LaunchActivity.instance.sheetFragmentsStack.remove(actionBarLayout[0]);
                 actionBarLayout[0] = null;
             }
+
+            @Override
+            public void onOpenAnimationEnd() {
+                fragment.onTransitionAnimationEnd(true, false);
+                if (params != null && params.onOpenAnimationFinished != null) {
+                    params.onOpenAnimationFinished.run();
+                }
+            }
+
+            @Override
+            protected void onInsetsChanged() {
+                if (actionBarLayout[0] != null) {
+                    for (BaseFragment baseFragment : actionBarLayout[0].getFragmentStack()) {
+                        if (baseFragment.getFragmentView() != null) {
+                            baseFragment.getFragmentView().requestLayout();
+                        }
+                    }
+                }
+            }
         };
-        fragment.setParentDialog(bottomSheet);
-        bottomSheet.show();
+        if (params != null) {
+            bottomSheet[0].setAllowNestedScroll(params.allowNestedScroll);
+            bottomSheet[0].transitionFromRight(params.transitionFromLeft);
+        }
+        fragment.setParentDialog(bottomSheet[0]);
+        bottomSheet[0].setOpenNoDelay(true);
+        bottomSheet[0].show();
+
         return actionBarLayout;
     }
 
-    public int getThemedColor(String key) {
+    public int getThemedColor(int key) {
         return Theme.getColor(key, getResourceProvider());
+    }
+
+    public Paint getThemedPaint(String paintKey) {
+        Paint paint = getResourceProvider() != null ? getResourceProvider().getPaint(paintKey) : null;
+        return paint != null ? paint : Theme.getThemePaint(paintKey);
     }
 
     public Drawable getThemedDrawable(String key) {
@@ -800,17 +947,31 @@ public abstract class BaseFragment {
     }
 
     public int getNavigationBarColor() {
-        return Theme.getColor(Theme.key_windowBackgroundGray);
+        int color = Theme.getColor(Theme.key_windowBackgroundGray, getResourceProvider());
+        if (storyViewerStack != null) {
+            for (int i = storyViewerStack.size() - 1; i >= 0; --i) {
+                StoryViewer storyViewer = storyViewerStack.get(i);
+                if (storyViewer.attachedToParent()) {
+                    color = storyViewer.getNavigationBarColor(color);
+                }
+            }
+        }
+        return color;
     }
 
     public void setNavigationBarColor(int color) {
         Activity activity = getParentActivity();
-        if (activity != null) {
-            Window window = activity.getWindow();
-            if (Build.VERSION.SDK_INT >= Build.VERSION_CODES.O && window != null && window.getNavigationBarColor() != color) {
-                window.setNavigationBarColor(color);
-                final float brightness = AndroidUtilities.computePerceivedBrightness(color);
-                AndroidUtilities.setLightNavigationBar(window, brightness >= 0.721f);
+        if (activity instanceof LaunchActivity) {
+            LaunchActivity launchActivity = (LaunchActivity) activity;
+            launchActivity.setNavigationBarColor(color, true);
+        } else {
+            if (activity != null) {
+                Window window = activity.getWindow();
+                if (Build.VERSION.SDK_INT >= Build.VERSION_CODES.O && window != null && window.getNavigationBarColor() != color) {
+                    window.setNavigationBarColor(color);
+                    final float brightness = AndroidUtilities.computePerceivedBrightness(color);
+                    AndroidUtilities.setLightNavigationBar(window, brightness >= 0.721f);
+                }
             }
         }
     }
@@ -824,7 +985,7 @@ public abstract class BaseFragment {
     }
 
     public Theme.ResourcesProvider getResourceProvider() {
-        return null;
+        return resourceProvider;
     }
 
     protected boolean allowPresentFragment() {
@@ -840,12 +1001,15 @@ public abstract class BaseFragment {
     }
 
     public boolean isLightStatusBar() {
+        if (getLastStoryViewer() != null && getLastStoryViewer().isShown()) {
+            return false;
+        }
         if (hasForceLightStatusBar() && !Theme.getCurrentTheme().isDark()) {
             return true;
         }
         Theme.ResourcesProvider resourcesProvider = getResourceProvider();
         int color;
-        String key = Theme.key_actionBarDefault;
+        int key = Theme.key_actionBarDefault;
         if (actionBar != null && actionBar.isActionModeShowed()) {
             key = Theme.key_actionBarActionModeDefault;
         }
@@ -885,9 +1049,101 @@ public abstract class BaseFragment {
         }
     }
 
+    public void setResourceProvider(Theme.ResourcesProvider resourceProvider) {
+        this.resourceProvider = resourceProvider;
+    }
+
+    public void onFragmentClosed() {
+
+    }
+
+    public void attachStoryViewer(ActionBarLayout.LayoutContainer parentLayout) {
+        if (storyViewerStack != null) {
+            for (int i = 0; i < storyViewerStack.size(); ++i) {
+                StoryViewer storyViewer = storyViewerStack.get(i);
+                if (storyViewer != null && storyViewer.attachedToParent()) {
+                    AndroidUtilities.removeFromParent(storyViewer.windowView);
+                    parentLayout.addView(storyViewer.windowView);
+                }
+            }
+        }
+    }
+
+    public void detachStoryViewer() {
+        if (storyViewerStack != null) {
+            for (int i = 0; i < storyViewerStack.size(); ++i) {
+                StoryViewer storyViewer = storyViewerStack.get(i);
+                if (storyViewer != null && storyViewer.attachedToParent()) {
+                    AndroidUtilities.removeFromParent(storyViewer.windowView);
+                }
+            }
+        }
+    }
+
+    public boolean isStoryViewer(View child) {
+        if (storyViewerStack != null) {
+            for (int i = 0; i < storyViewerStack.size(); ++i) {
+                StoryViewer storyViewer = storyViewerStack.get(i);
+                if (storyViewer != null && child == storyViewer.windowView) {
+                    return true;
+                }
+            }
+        }
+        return false;
+    }
+
+    public void setKeyboardHeightFromParent(int keyboardHeight) {
+        if (storyViewerStack != null) {
+            for (int i = 0; i < storyViewerStack.size(); ++i) {
+                StoryViewer storyViewer = storyViewerStack.get(i);
+                if (storyViewer != null) {
+                    storyViewer.setKeyboardHeightFromParent(keyboardHeight);
+                }
+            }
+        }
+    }
 
     public interface PreviewDelegate {
         void finishFragment();
+    }
+
+    public StoryViewer getOrCreateStoryViewer() {
+        if (storyViewerStack == null) {
+            storyViewerStack = new ArrayList<>();
+        }
+        if (storyViewerStack.isEmpty()) {
+            StoryViewer storyViewer = new StoryViewer(this);
+            if (parentLayout != null && parentLayout.isSheet()) {
+                storyViewer.fromBottomSheet = true;
+            }
+            storyViewerStack.add(storyViewer);
+        }
+        return storyViewerStack.get(0);
+    }
+
+    public StoryViewer createOverlayStoryViewer() {
+        if (storyViewerStack == null) {
+            storyViewerStack = new ArrayList<>();
+        }
+        StoryViewer storyViewer = new StoryViewer(this);
+        if (parentLayout != null && parentLayout.isSheet()) {
+            storyViewer.fromBottomSheet = true;
+        }
+        storyViewerStack.add(storyViewer);
+        return storyViewer;
+    }
+
+    public void onBottomSheetCreated() {
+
+    }
+
+    public static class BottomSheetParams {
+        public boolean transitionFromLeft;
+        public boolean allowNestedScroll;
+        public Runnable onDismiss;
+        public Runnable onOpenAnimationFinished;
+        public Runnable onPreFinished;
+        public boolean occupyNavigationBar;
     }
 
 }

@@ -32,6 +32,9 @@ import java.util.ArrayList;
 
 public class HeaderCell extends FrameLayout {
 
+    protected int padding;
+    protected int bottomMargin;
+
     private TextView textView;
     private SimpleTextView textView2;
     private int height = 40;
@@ -53,21 +56,23 @@ public class HeaderCell extends FrameLayout {
         this(context, Theme.key_windowBackgroundWhiteBlueHeader, padding, 15, false, resourcesProvider);
     }
 
-    public HeaderCell(Context context, String textColorKey, int padding, int topMargin, boolean text2) {
+    public HeaderCell(Context context, int textColorKey, int padding, int topMargin, boolean text2) {
         this(context, textColorKey, padding, topMargin, text2, null);
     }
 
-    public HeaderCell(Context context, String textColorKey, int padding, int topMargin, boolean text2, Theme.ResourcesProvider resourcesProvider) {
+    public HeaderCell(Context context, int textColorKey, int padding, int topMargin, boolean text2, Theme.ResourcesProvider resourcesProvider) {
         this(context, textColorKey, padding, topMargin, 0, text2, resourcesProvider);
     }
 
-    public HeaderCell(Context context, String textColorKey, int padding, int topMargin, int bottomMargin, boolean text2, Theme.ResourcesProvider resourcesProvider) {
+    public HeaderCell(Context context, int textColorKey, int padding, int topMargin, int bottomMargin, boolean text2, Theme.ResourcesProvider resourcesProvider) {
         super(context);
         this.resourcesProvider = resourcesProvider;
+        this.padding = padding;
+        this.bottomMargin = bottomMargin;
 
         textView = new TextView(getContext());
         textView.setTextSize(TypedValue.COMPLEX_UNIT_DIP, 15);
-        textView.setTypeface(AndroidUtilities.getTypeface("fonts/rmedium.ttf"));
+        textView.setTypeface(AndroidUtilities.getTypeface(AndroidUtilities.TYPEFACE_ROBOTO_MEDIUM));
         textView.setEllipsize(TextUtils.TruncateAt.END);
         textView.setGravity((LocaleController.isRTL ? Gravity.RIGHT : Gravity.LEFT) | Gravity.CENTER_VERTICAL);
         textView.setMinHeight(AndroidUtilities.dp(height - topMargin));
@@ -156,8 +161,7 @@ public class HeaderCell extends FrameLayout {
         info.setEnabled(true);
     }
 
-    private int getThemedColor(String key) {
-        Integer color = resourcesProvider != null ? resourcesProvider.getColor(key) : null;
-        return color != null ? color : Theme.getColor(key);
+    private int getThemedColor(int key) {
+        return Theme.getColor(key, resourcesProvider);
     }
 }

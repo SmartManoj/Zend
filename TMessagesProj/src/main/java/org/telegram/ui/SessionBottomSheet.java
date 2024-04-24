@@ -6,7 +6,6 @@ import android.graphics.Canvas;
 import android.graphics.PorterDuff;
 import android.graphics.PorterDuffColorFilter;
 import android.graphics.drawable.Drawable;
-import android.os.Build;
 import android.util.TypedValue;
 import android.view.Gravity;
 import android.view.View;
@@ -30,8 +29,6 @@ import org.telegram.ui.ActionBar.AlertDialog;
 import org.telegram.ui.ActionBar.BaseFragment;
 import org.telegram.ui.ActionBar.BottomSheet;
 import org.telegram.ui.ActionBar.Theme;
-import org.telegram.ui.Cells.SessionCell;
-import org.telegram.ui.Cells.TextCheckCell2;
 import org.telegram.ui.Components.BulletinFactory;
 import org.telegram.ui.Components.LayoutHelper;
 import org.telegram.ui.Components.RLottieImageView;
@@ -85,7 +82,7 @@ public class SessionBottomSheet extends BottomSheet {
         if ((session.flags & 1) != 0) {
             timeText = LocaleController.getString("Online", R.string.Online);
         } else {
-            timeText = LocaleController.formatDateTime(session.date_active);
+            timeText = LocaleController.formatDateTime(session.date_active, true);
         }
         timeView.setText(timeText);
 
@@ -262,7 +259,7 @@ public class SessionBottomSheet extends BottomSheet {
                     fragment.showDialog(alertDialog);
                     TextView button = (TextView) alertDialog.getButton(DialogInterface.BUTTON_POSITIVE);
                     if (button != null) {
-                        button.setTextColor(Theme.getColor(Theme.key_dialogTextRed));
+                        button.setTextColor(Theme.getColor(Theme.key_text_RedBold));
                     }
                 }
             });
@@ -310,7 +307,7 @@ public class SessionBottomSheet extends BottomSheet {
         }
         String deviceModel = session.device_model.toLowerCase();
         int iconId;
-        String colorKey, colorKey2;
+        int colorKey, colorKey2;
         boolean animation = true;
 
 

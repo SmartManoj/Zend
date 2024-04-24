@@ -22,8 +22,6 @@ import androidx.recyclerview.widget.DefaultItemAnimator;
 import androidx.recyclerview.widget.LinearLayoutManager;
 import androidx.recyclerview.widget.RecyclerView;
 
-import com.google.android.exoplayer2.util.Log;
-
 import org.telegram.PhoneFormat.PhoneFormat;
 import org.telegram.SQLite.SQLiteCursor;
 import org.telegram.SQLite.SQLitePreparedStatement;
@@ -78,12 +76,12 @@ public class DialogsSearchAdapter extends RecyclerListView.SelectionAdapter {
     private Runnable searchRunnable;
     private Runnable searchRunnable2;
     private ArrayList<Object> searchResult = new ArrayList<>();
-    private ArrayList<ContactsController.Contact> searchContacts = new ArrayList<>();
-    private ArrayList<TLRPC.TL_forumTopic> searchTopics = new ArrayList<>();
+    private final ArrayList<ContactsController.Contact> searchContacts = new ArrayList<>();
+    private final ArrayList<TLRPC.TL_forumTopic> searchTopics = new ArrayList<>();
     private ArrayList<CharSequence> searchResultNames = new ArrayList<>();
-    private ArrayList<MessageObject> searchForumResultMessages = new ArrayList<>();
-    private ArrayList<MessageObject> searchResultMessages = new ArrayList<>();
-    private ArrayList<String> searchResultHashtags = new ArrayList<>();
+    private final ArrayList<MessageObject> searchForumResultMessages = new ArrayList<>();
+    private final ArrayList<MessageObject> searchResultMessages = new ArrayList<>();
+    private final ArrayList<String> searchResultHashtags = new ArrayList<>();
     private String lastSearchText;
     private boolean searchWas;
     private int reqId = 0;
@@ -113,12 +111,14 @@ public class DialogsSearchAdapter extends RecyclerListView.SelectionAdapter {
     public View showMoreHeader;
     private Runnable cancelShowMoreAnimation;
     private ArrayList<Long> filterDialogIds;
+    private final DialogsActivity dialogsActivity;
+    private final Theme.ResourcesProvider resourcesProvider;
 
     private int currentAccount = UserConfig.selectedAccount;
 
     private ArrayList<RecentSearchObject> recentSearchObjects = new ArrayList<>();
-    private ArrayList<RecentSearchObject> filteredRecentSearchObjects = new ArrayList<>();
-    private ArrayList<RecentSearchObject> filtered2RecentSearchObjects = new ArrayList<>();
+    private final ArrayList<RecentSearchObject> filteredRecentSearchObjects = new ArrayList<>();
+    private final ArrayList<RecentSearchObject> filtered2RecentSearchObjects = new ArrayList<>();
     private String filteredRecentQuery = null;
     private LongSparseArray<RecentSearchObject> recentSearchObjectsById = new LongSparseArray<>();
     private ArrayList<FiltersView.DateData> localTipDates = new ArrayList<>();
@@ -151,6 +151,7 @@ public class DialogsSearchAdapter extends RecyclerListView.SelectionAdapter {
     public interface DialogsSearchAdapterDelegate {
         void searchStateChanged(boolean searching, boolean animated);
         void didPressedOnSubDialog(long did);
+        void didPressedBlockedDialog(View view, long did);
         void needRemoveHint(long did);
         void needClearList();
         void runResultsEnterAnimation();
@@ -164,11 +165,15 @@ public class DialogsSearchAdapter extends RecyclerListView.SelectionAdapter {
         private final int currentAccount;
         private boolean drawChecked;
         private boolean forceDarkTheme;
+        private boolean showPremiumBlock;
+        private Theme.ResourcesProvider resourcesProvider;
 
-        public CategoryAdapterRecycler(Context context, int account, boolean drawChecked) {
+        public CategoryAdapterRecycler(Context context, int account, boolean drawChecked, boolean showPremiumBlock, Theme.ResourcesProvider resourcesProvider) {
             this.drawChecked = drawChecked;
             mContext = context;
             currentAccount = account;
+            this.showPremiumBlock = showPremiumBlock;
+            this.resourcesProvider = resourcesProvider;
         }
 
         public void setIndex(int value) {
@@ -177,7 +182,10 @@ public class DialogsSearchAdapter extends RecyclerListView.SelectionAdapter {
 
         @Override
         public RecyclerView.ViewHolder onCreateViewHolder(ViewGroup parent, int viewType) {
-            HintDialogCell cell = new HintDialogCell(mContext, drawChecked);
+            HintDialogCell cell = new HintDialogCell(mContext, drawChecked, resourcesProvider);
+            if (showPremiumBlock) {
+                cell.showPremiumBlocked();
+            }
             cell.setLayoutParams(new RecyclerView.LayoutParams(AndroidUtilities.dp(80), AndroidUtilities.dp(86)));
             return new RecyclerListView.Holder(cell);
         }
@@ -222,9 +230,39 @@ public class DialogsSearchAdapter extends RecyclerListView.SelectionAdapter {
         }
     }
 
-    public DialogsSearchAdapter(Context context, int messagesSearch, int type, DefaultItemAnimator itemAnimator, boolean allowGlobalSearch) {
+    private boolean filter(Object obj) {
+        if (dialogsType != DialogsActivity.DIALOGS_TYPE_START_ATTACH_BOT) {
+            return true;
+        }
+        // add more filters if needed
+        if (obj instanceof TLRPC.User) {
+            if (((TLRPC.User) obj).bot) {
+                return dialogsActivity.allowBots;
+            }
+            return dialogsActivity.allowUsers;
+        } else if (obj instanceof TLRPC.Chat) {
+            TLRPC.Chat chat = (TLRPC.Chat) obj;
+            if (ChatObject.isChannel(chat)) {
+                return dialogsActivity.allowChannels;
+            } else if (ChatObject.isMegagroup(chat)) {
+                return dialogsActivity.allowGroups || dialogsActivity.allowMegagroups;
+            } else {
+                return dialogsActivity.allowGroups || dialogsActivity.allowLegacyGroups;
+            }
+        }
+        return false;
+    }
+
+    public DialogsSearchAdapter(Context context, DialogsActivity dialogsActivity, int messagesSearch, int type, DefaultItemAnimator itemAnimator, boolean allowGlobalSearch, Theme.ResourcesProvider resourcesProvider) {
         this.itemAnimator = itemAnimator;
-        searchAdapterHelper = new SearchAdapterHelper(false);
+        this.dialogsActivity = dialogsActivity;
+        this.resourcesProvider = resourcesProvider;
+        searchAdapterHelper = new SearchAdapterHelper(false) {
+            @Override
+            protected boolean filter(TLObject obj) {
+                return DialogsSearchAdapter.this.filter(obj);
+            }
+        };
         searchAdapterHelper.setDelegate(new SearchAdapterHelper.SearchAdapterHelperDelegate() {
             @Override
             public void onDataSetChanged(int searchId) {
@@ -433,7 +471,7 @@ public class DialogsSearchAdapter extends RecyclerListView.SelectionAdapter {
             ConnectionsManager.getInstance(currentAccount).cancelRequest(reqId, true);
             reqId = 0;
         }
-        if (TextUtils.isEmpty(query)) {
+        if (TextUtils.isEmpty(query) || delegate.getSearchForumDialogId() != 0) {
             filteredRecentQuery = null;
             searchResultMessages.clear();
             searchForumResultMessages.clear();
@@ -577,6 +615,7 @@ public class DialogsSearchAdapter extends RecyclerListView.SelectionAdapter {
             dialogsType != DialogsActivity.DIALOGS_TYPE_USERS_ONLY &&
             dialogsType != DialogsActivity.DIALOGS_TYPE_CHANNELS_ONLY &&
             dialogsType != DialogsActivity.DIALOGS_TYPE_GROUPS_ONLY &&
+            dialogsType != DialogsActivity.DIALOGS_TYPE_BOT_SHARE &&
             dialogsType != DialogsActivity.DIALOGS_TYPE_IMPORT_HISTORY_GROUPS &&
             dialogsType != DialogsActivity.DIALOGS_TYPE_BOT_REQUEST_PEER
         );
@@ -873,6 +912,12 @@ public class DialogsSearchAdapter extends RecyclerListView.SelectionAdapter {
                 searchResultMessages.clear();
             }
             searchWas = true;
+            for (int i = 0; i < result.size(); ++i) {
+                if (!filter(result.get(i))) {
+                    result.remove(i);
+                    i--;
+                }
+            }
             final int recentCount = filtered2RecentSearchObjects.size();
             for (int a = 0; a < result.size(); a++) {
                 Object obj = result.get(a);
@@ -1062,7 +1107,7 @@ public class DialogsSearchAdapter extends RecyclerListView.SelectionAdapter {
                     if (searchId != lastSearchId) {
                         return;
                     }
-                    if (needMessagesSearch != 2 && dialogsType != DialogsActivity.DIALOGS_TYPE_GROUPS_ONLY && dialogsType != DialogsActivity.DIALOGS_TYPE_CHANNELS_ONLY) {
+                    if (needMessagesSearch != 2 && dialogsType != DialogsActivity.DIALOGS_TYPE_GROUPS_ONLY && dialogsType != DialogsActivity.DIALOGS_TYPE_CHANNELS_ONLY && delegate.getSearchForumDialogId() == 0) {
                         searchAdapterHelper.queryServerSearch(
                             query,
                             true,
@@ -1093,7 +1138,7 @@ public class DialogsSearchAdapter extends RecyclerListView.SelectionAdapter {
 
     public int getRecentItemsCount() {
         ArrayList<RecentSearchObject> recent = searchWas ? filtered2RecentSearchObjects : filteredRecentSearchObjects;
-        return (!recent.isEmpty() ? recent.size() + 1 : 0) + (!searchWas && !MediaDataController.getInstance(currentAccount).hints.isEmpty() ? 1 : 0);
+        return (!recent.isEmpty() ? recent.size() + 1 : 0) + (hasHints() ? 1 : 0);
     }
 
     public int getRecentResultsCount() {
@@ -1176,7 +1221,7 @@ public class DialogsSearchAdapter extends RecyclerListView.SelectionAdapter {
             }
         }
         if (isRecentSearchDisplayed()) {
-            int offset = (!searchWas && !MediaDataController.getInstance(currentAccount).hints.isEmpty() ? 1 : 0);
+            int offset = (hasHints() ? 1 : 0);
             ArrayList<RecentSearchObject> recent = searchWas ? filtered2RecentSearchObjects : filteredRecentSearchObjects;
             if (i > offset && i - 1 - offset < recent.size()) {
                 TLObject object = recent.get(i - 1 - offset).object;
@@ -1264,7 +1309,7 @@ public class DialogsSearchAdapter extends RecyclerListView.SelectionAdapter {
             return false;
         }
         if (isRecentSearchDisplayed()) {
-            int offset = (!searchWas && !MediaDataController.getInstance(currentAccount).hints.isEmpty() ? 1 : 0);
+            int offset = (hasHints() ? 1 : 0);
             ArrayList<RecentSearchObject> recent = searchWas ? filtered2RecentSearchObjects : filteredRecentSearchObjects;
             if (i > offset && i - 1 - offset < recent.size()) {
                 return false;
@@ -1285,10 +1330,12 @@ public class DialogsSearchAdapter extends RecyclerListView.SelectionAdapter {
             globalCount = 4;
         }
         int contactsCount = searchContacts.size();
-        if (i >= 0 && i < contactsCount) {
-            return false;
+        if (contactsCount > 0) {
+            if (i >= 0 && i < contactsCount) {
+                return false;
+            }
+            i -= contactsCount + 1;
         }
-        i -= contactsCount + 1;
         if (i >= 0 && i < localCount) {
             return false;
         }
@@ -1333,7 +1380,7 @@ public class DialogsSearchAdapter extends RecyclerListView.SelectionAdapter {
         View view;
         switch (viewType) {
             case VIEW_TYPE_PROFILE_CELL:
-                view = new ProfileSearchCell(mContext);
+                view = new ProfileSearchCell(mContext).showPremiumBlock(dialogsType == DialogsActivity.DIALOGS_TYPE_FORWARD);
                 break;
             case VIEW_TYPE_GRAY_SECTION:
                 view = new GraySectionCell(mContext);
@@ -1381,8 +1428,14 @@ public class DialogsSearchAdapter extends RecyclerListView.SelectionAdapter {
                 layoutManager.setOrientation(LinearLayoutManager.HORIZONTAL);
                 horizontalListView.setLayoutManager(layoutManager);
                 //horizontalListView.setDisallowInterceptTouchEvents(true);
-                horizontalListView.setAdapter(new CategoryAdapterRecycler(mContext, currentAccount, false));
+                horizontalListView.setAdapter(new CategoryAdapterRecycler(mContext, currentAccount, false, dialogsType == DialogsActivity.DIALOGS_TYPE_FORWARD, resourcesProvider));
                 horizontalListView.setOnItemClickListener((view1, position) -> {
+                    if (view1 instanceof HintDialogCell && ((HintDialogCell) view1).isBlocked()) {
+                        if (delegate != null) {
+                            delegate.didPressedBlockedDialog(view1, ((HintDialogCell) view1).getDialogId());
+                        }
+                        return;
+                    }
                     if (delegate != null) {
                         delegate.didPressedOnSubDialog((Long) view1.getTag());
                     }
@@ -1410,6 +1463,10 @@ public class DialogsSearchAdapter extends RecyclerListView.SelectionAdapter {
             view.setLayoutParams(new RecyclerView.LayoutParams(RecyclerView.LayoutParams.MATCH_PARENT, RecyclerView.LayoutParams.WRAP_CONTENT));
         }
         return new RecyclerListView.Holder(view);
+    }
+
+    private boolean hasHints() {
+        return !searchWas && !MediaDataController.getInstance(currentAccount).hints.isEmpty() && (dialogsType != DialogsActivity.DIALOGS_TYPE_START_ATTACH_BOT || dialogsActivity.allowUsers);
     }
 
     @Override
@@ -1563,7 +1620,7 @@ public class DialogsSearchAdapter extends RecyclerListView.SelectionAdapter {
                 } else {
                     int rawPosition = position;
                     if (isRecentSearchDisplayed() || !searchTopics.isEmpty() || !searchContacts.isEmpty()) {
-                        int offset = (!searchWas && !MediaDataController.getInstance(currentAccount).hints.isEmpty() ? 1 : 0);
+                        int offset = hasHints() ? 1 : 0;
                         if (position < offset) {
                             cell.setText(LocaleController.getString("ChatHints", R.string.ChatHints));
                             return;
@@ -1745,7 +1802,7 @@ public class DialogsSearchAdapter extends RecyclerListView.SelectionAdapter {
             case VIEW_TYPE_ADD_BY_PHONE: {
                 String str = (String) getItem(position);
                 TextCell cell = (TextCell) holder.itemView;
-                cell.setColors(null, Theme.key_windowBackgroundWhiteBlueText2);
+                cell.setColors(-1, Theme.key_windowBackgroundWhiteBlueText2);
                 cell.setText(LocaleController.formatString("AddContactByPhone", R.string.AddContactByPhone, PhoneFormat.getInstance().format("+" + str)), false);
                 break;
             }
@@ -1767,7 +1824,7 @@ public class DialogsSearchAdapter extends RecyclerListView.SelectionAdapter {
             return i == 0 ? VIEW_TYPE_GRAY_SECTION : VIEW_TYPE_HASHTAG_CELL;
         }
         if (isRecentSearchDisplayed()) {
-            int offset = (!searchWas && !MediaDataController.getInstance(currentAccount).hints.isEmpty() ? 1 : 0);
+            int offset = hasHints() ? 1 : 0;
             if (i < offset) {
                 return VIEW_TYPE_CATEGORY_LIST;
             }
@@ -1888,7 +1945,7 @@ public class DialogsSearchAdapter extends RecyclerListView.SelectionAdapter {
             filteredRecentSearchObjects.clear();
             final int count = recentSearchObjects.size();
             for (int i = 0; i < count; ++i) {
-                if (delegate != null && delegate.getSearchForumDialogId() == recentSearchObjects.get(i).did) {
+                if (delegate != null && delegate.getSearchForumDialogId() == recentSearchObjects.get(i).did || !filter(recentSearchObjects.get(i).object)) {
                     continue;
                 }
                 filteredRecentSearchObjects.add(recentSearchObjects.get(i));
@@ -1902,7 +1959,7 @@ public class DialogsSearchAdapter extends RecyclerListView.SelectionAdapter {
             if (obj == null || obj.object == null) {
                 continue;
             }
-            if (delegate != null && delegate.getSearchForumDialogId() == obj.did) {
+            if (delegate != null && delegate.getSearchForumDialogId() == obj.did || !filter(recentSearchObjects.get(i).object)) {
                 continue;
             }
             String title = null, username = null;

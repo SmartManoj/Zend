@@ -56,10 +56,12 @@ import org.telegram.tgnet.TLRPC;
 import org.telegram.ui.ActionBar.ActionBar;
 import org.telegram.ui.ActionBar.ActionBarMenu;
 import org.telegram.ui.ActionBar.ActionBarMenuItem;
+import org.telegram.ui.ActionBar.BaseFragment;
 import org.telegram.ui.ActionBar.Theme;
 import org.telegram.ui.Cells.ChatActionCell;
 import org.telegram.ui.ChatActivity;
 import org.telegram.ui.Components.spoilers.SpoilerEffect;
+import org.telegram.ui.LaunchActivity;
 import org.telegram.ui.PhotoViewer;
 
 import java.util.ArrayList;
@@ -77,7 +79,7 @@ public class ChatAttachAlertPhotoLayoutPreview extends ChatAttachAlert.AttachAle
         return AndroidUtilities.displaySize.y > AndroidUtilities.displaySize.x ? .8f : .45f;
     }
 
-    private ChatActivity.ThemeDelegate themeDelegate;
+    private Theme.ResourcesProvider themeDelegate;
 
     public RecyclerListView listView;
     private LinearLayoutManager layoutManager;
@@ -96,7 +98,7 @@ public class ChatAttachAlertPhotoLayoutPreview extends ChatAttachAlert.AttachAle
 
     private Drawable videoPlayImage;
 
-    public ChatAttachAlertPhotoLayoutPreview(ChatAttachAlert alert, Context context, ChatActivity.ThemeDelegate themeDelegate) {
+    public ChatAttachAlertPhotoLayoutPreview(ChatAttachAlert alert, Context context, Theme.ResourcesProvider themeDelegate) {
         super(alert, context, themeDelegate);
 
         this.themeDelegate = themeDelegate;
@@ -210,7 +212,7 @@ public class ChatAttachAlertPhotoLayoutPreview extends ChatAttachAlert.AttachAle
     private boolean shown = false;
 
     @Override
-    void onShow(ChatAttachAlert.AttachAlertLayout previousLayout) {
+    public void onShow(ChatAttachAlert.AttachAlertLayout previousLayout) {
         shown = true;
         if (previousLayout instanceof ChatAttachAlertPhotoLayout) {
             this.photoLayout = (ChatAttachAlertPhotoLayout) previousLayout;
@@ -249,7 +251,7 @@ public class ChatAttachAlertPhotoLayoutPreview extends ChatAttachAlert.AttachAle
     }
 
     @Override
-    void onHide() {
+    public void onHide() {
         shown = false;
         if (headerAnimator != null) {
             headerAnimator.cancel();
@@ -268,12 +270,12 @@ public class ChatAttachAlertPhotoLayoutPreview extends ChatAttachAlert.AttachAle
     }
 
     @Override
-    int getSelectedItemsCount() {
+    public int getSelectedItemsCount() {
         return groupsView.getPhotosCount();
     }
 
     @Override
-    void onHidden() {
+    public void onHidden() {
         draggingCell = null;
         if (undoView != null) {
             undoView.hide(false, 0);
@@ -288,17 +290,17 @@ public class ChatAttachAlertPhotoLayoutPreview extends ChatAttachAlert.AttachAle
     }
 
     @Override
-    int getFirstOffset() {
+    public int getFirstOffset() {
         return getListTopPadding() + AndroidUtilities.dp(56);
     }
 
     @Override
-    boolean shouldHideBottomButtons() {
+    public boolean shouldHideBottomButtons() {
         return true;
     }
 
     @Override
-    void applyCaption(CharSequence text) {
+    public void applyCaption(CharSequence text) {
         if (photoLayout != null) {
             photoLayout.applyCaption(text);
         }
@@ -774,12 +776,12 @@ public class ChatAttachAlertPhotoLayoutPreview extends ChatAttachAlert.AttachAle
     }
 
     @Override
-    int getListTopPadding() {
+    public int getListTopPadding() {
         return listView.getPaddingTop()/* + AndroidUtilities.dp(9)*/;
     }
 
     @Override
-    int getCurrentItemTop() {
+    public int getCurrentItemTop() {
         if (listView.getChildCount() <= 0) {
             listView.setTopGlowOffset(listView.getPaddingTop());
             return Integer.MAX_VALUE;
@@ -824,18 +826,18 @@ public class ChatAttachAlertPhotoLayoutPreview extends ChatAttachAlert.AttachAle
     }
 
     @Override
-    void scrollToTop() {
+    public void scrollToTop() {
 //        scrollView.smoothScrollTo(0, 0);
         listView.smoothScrollToPosition(0);
     }
 
     @Override
-    int needsActionBar() {
+    public int needsActionBar() {
         return 1;
     }
 
     @Override
-    boolean onBackPressed() {
+    public boolean onBackPressed() {
         parentAlert.updatePhotoPreview(false);
         return true;
     }
@@ -850,7 +852,7 @@ public class ChatAttachAlertPhotoLayoutPreview extends ChatAttachAlert.AttachAle
     }
 
     @Override
-    void onMenuItemClick(int id) {
+    public void onMenuItemClick(int id) {
         try {
             parentAlert.getPhotoLayout().onMenuItemClick(id);
         } catch (Exception ignore) {}
@@ -906,7 +908,7 @@ public class ChatAttachAlertPhotoLayoutPreview extends ChatAttachAlert.AttachAle
     }
 
     @Override
-    void onSelectedItemsCountChanged(int count) {
+    public void onSelectedItemsCountChanged(int count) {
         if (count > 1) {
             parentAlert.selectedMenuItem.showSubItem(ChatAttachAlertPhotoLayout.group);
         } else {
@@ -1817,11 +1819,15 @@ public class ChatAttachAlertPhotoLayoutPreview extends ChatAttachAlert.AttachAle
                             chatActivity = null;
                             type = 4;
                         }
+                        BaseFragment fragment = parentAlert.baseFragment;
+                        if (fragment == null) {
+                            fragment = LaunchActivity.getLastFragment();
+                        }
                         if (!parentAlert.delegate.needEnterComment()) {
-                            AndroidUtilities.hideKeyboard(parentAlert.baseFragment.getFragmentView().findFocus());
+                            AndroidUtilities.hideKeyboard(fragment.getFragmentView().findFocus());
                             AndroidUtilities.hideKeyboard(parentAlert.getContainer().findFocus());
                         }
-                        PhotoViewer.getInstance().setParentActivity(parentAlert.baseFragment, resourcesProvider);
+                        PhotoViewer.getInstance().setParentActivity(fragment, resourcesProvider);
                         PhotoViewer.getInstance().setParentAlert(parentAlert);
                         PhotoViewer.getInstance().setMaxSelectedPhotos(parentAlert.maxSelectedPhotos, parentAlert.allowOrder);
                         photoViewerProvider.init(arrayList);
@@ -2551,7 +2557,7 @@ public class ChatAttachAlertPhotoLayoutPreview extends ChatAttachAlert.AttachAle
     }
 
     public Drawable getThemedDrawable(String drawableKey) {
-        Drawable drawable = themeDelegate.getDrawable(drawableKey);
+        Drawable drawable = themeDelegate != null ? themeDelegate.getDrawable(drawableKey) : null;
         return drawable != null ? drawable : Theme.getThemeDrawable(drawableKey);
     }
 }

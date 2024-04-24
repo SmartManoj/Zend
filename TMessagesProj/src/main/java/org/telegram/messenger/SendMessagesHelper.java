@@ -56,14 +56,17 @@ import org.telegram.tgnet.RequestDelegate;
 import org.telegram.tgnet.SerializedData;
 import org.telegram.tgnet.TLObject;
 import org.telegram.tgnet.TLRPC;
+import org.telegram.tgnet.tl.TL_stories;
 import org.telegram.ui.ActionBar.AlertDialog;
 import org.telegram.ui.ActionBar.BaseFragment;
 import org.telegram.ui.ActionBar.Theme;
+import org.telegram.ui.Business.QuickRepliesController;
 import org.telegram.ui.Cells.ChatMessageCell;
 import org.telegram.ui.ChatActivity;
 import org.telegram.ui.Components.AlertsCreator;
 import org.telegram.ui.Components.AnimatedEmojiSpan;
 import org.telegram.ui.Components.AnimatedFileDrawable;
+import org.telegram.ui.bots.BotWebViewSheet;
 import org.telegram.ui.Components.Bulletin;
 import org.telegram.ui.Components.LayoutHelper;
 import org.telegram.ui.Components.Point;
@@ -71,6 +74,7 @@ import org.telegram.ui.Components.Premium.LimitReachedBottomSheet;
 import org.telegram.ui.Components.Reactions.ReactionsLayoutInBubble;
 import org.telegram.ui.Components.Reactions.ReactionsUtils;
 import org.telegram.ui.PaymentFormActivity;
+import org.telegram.ui.Stories.MessageMediaStoryFull;
 import org.telegram.ui.TwoStepVerificationActivity;
 import org.telegram.ui.TwoStepVerificationSetupActivity;
 
@@ -93,6 +97,8 @@ import java.util.concurrent.TimeUnit;
 
 public class SendMessagesHelper extends BaseController implements NotificationCenter.NotificationCenterDelegate {
 
+    public static final int MEDIA_TYPE_DICE = 11;
+    public static final int MEDIA_TYPE_STORY = 12;
     private HashMap<String, ArrayList<DelayedMessage>> delayedMessages = new HashMap<>();
     private SparseArray<MessageObject> unsentMessages = new SparseArray<>();
     private SparseArray<TLRPC.Message> sendingMessages = new SparseArray<>();
@@ -121,6 +127,76 @@ public class SendMessagesHelper extends BaseController implements NotificationCe
             }
         }
         return false;
+    }
+
+    public TLRPC.InputReplyTo createReplyInput(TL_stories.StoryItem storyItem) {
+        TLRPC.TL_inputReplyToStory replyTo = new TLRPC.TL_inputReplyToStory();
+        replyTo.story_id = storyItem.id;
+        replyTo.peer = getMessagesController().getInputPeer(storyItem.dialogId);
+        return replyTo;
+    }
+
+    public TLRPC.InputReplyTo createReplyInput(int replyToMsgId) {
+        return createReplyInput(null, replyToMsgId, 0, null);
+    }
+
+    public TLRPC.InputReplyTo createReplyInput(TLRPC.InputPeer sendToPeer, int replyToMsgId, int topMessageId, ChatActivity.ReplyQuote replyQuote) {
+        TLRPC.TL_inputReplyToMessage replyTo = new TLRPC.TL_inputReplyToMessage();
+        replyTo.reply_to_msg_id = replyToMsgId;
+        if (topMessageId != 0) {
+            replyTo.flags |= 1;
+            replyTo.top_msg_id = topMessageId;
+        }
+        if (replyQuote != null) {
+            replyTo.quote_text = replyQuote.getText();
+            if (!TextUtils.isEmpty(replyTo.quote_text)) {
+                replyTo.flags |= 4;
+                replyTo.quote_entities = replyQuote.getEntities();
+                if (replyTo.quote_entities != null && !replyTo.quote_entities.isEmpty()) {
+                    replyTo.quote_entities = new ArrayList<>(replyTo.quote_entities);
+                    replyTo.flags |= 8;
+                }
+                replyTo.flags |= 16;
+                replyTo.quote_offset = replyQuote.start;
+            }
+        }
+        if (replyQuote != null && replyQuote.message != null) {
+            long did = replyQuote.message.getDialogId();
+            TLRPC.InputPeer peer = getMessagesController().getInputPeer(did);
+            if (peer != null && !MessageObject.peersEqual(peer, sendToPeer)) {
+                replyTo.flags |= 2;
+                replyTo.reply_to_peer_id = peer;
+            }
+        }
+        return replyTo;
+    }
+
+    public TLRPC.InputReplyTo createReplyInput(TLRPC.TL_messageReplyHeader replyHeader) {
+        TLRPC.TL_inputReplyToMessage replyTo = new TLRPC.TL_inputReplyToMessage();
+        replyTo.reply_to_msg_id = replyHeader.reply_to_msg_id;
+        if ((replyHeader.flags & 2) != 0) {
+            replyTo.flags |= 1;
+            replyTo.top_msg_id = replyHeader.reply_to_top_id;
+        }
+        if ((replyHeader.flags & 1) != 0) {
+            replyTo.flags |= 2;
+            replyTo.reply_to_peer_id = MessagesController.getInstance(currentAccount).getInputPeer(replyHeader.reply_to_peer_id);
+        }
+        if (replyHeader.quote) {
+            if ((replyHeader.flags & 64) != 0) {
+                replyTo.flags |= 4;
+                replyTo.quote_text = replyHeader.quote_text;
+            }
+            if ((replyHeader.flags & 128) != 0) {
+                replyTo.flags |= 8;
+                replyTo.quote_entities = replyHeader.quote_entities;
+            }
+            if ((replyHeader.flags & 1024) != 0) {
+                replyTo.flags |= 16;
+                replyTo.quote_offset = replyHeader.quote_offset;
+            }
+        }
+        return replyTo;
     }
 
     public class ImportingHistory {
@@ -302,6 +378,7 @@ public class SendMessagesHelper extends BaseController implements NotificationCe
         public boolean animated;
         public TLRPC.TL_inputStickerSetItem item;
 
+        public VideoEditedInfo videoEditedInfo;
         public void uploadMedia(int account, TLRPC.InputFile inputFile, Runnable onFinish) {
             TLRPC.TL_messages_uploadMedia req = new TLRPC.TL_messages_uploadMedia();
             req.peer = new TLRPC.TL_inputPeerSelf();
@@ -425,7 +502,6 @@ public class SendMessagesHelper extends BaseController implements NotificationCe
             req.user_id = new TLRPC.TL_inputUserSelf();
             req.title = title;
             req.short_name = shortName;
-            req.animated = uploadMedia.get(0).animated;
             if (software != null) {
                 req.software = software;
                 req.flags |= 8;
@@ -762,7 +838,7 @@ public class SendMessagesHelper extends BaseController implements NotificationCe
             if (type == 4) {
                 for (int a = 0; a < messageObjects.size(); a++) {
                     MessageObject obj = messageObjects.get(a);
-                    getMessagesStorage().markMessageAsSendError(obj.messageOwner, obj.scheduled);
+                    getMessagesStorage().markMessageAsSendError(obj.messageOwner, obj.scheduled ? 1 : 0);
                     obj.messageOwner.send_state = MessageObject.MESSAGE_SEND_STATE_SEND_ERROR;
                     getNotificationCenter().postNotificationName(NotificationCenter.messageSendError, obj.getId());
                     processSentMessage(obj.getId());
@@ -770,7 +846,7 @@ public class SendMessagesHelper extends BaseController implements NotificationCe
                 }
                 delayedMessages.remove( "group_" + groupId);
             } else {
-                getMessagesStorage().markMessageAsSendError(obj.messageOwner, obj.scheduled);
+                getMessagesStorage().markMessageAsSendError(obj.messageOwner, obj.scheduled ? 1 : 0);
                 obj.messageOwner.send_state = MessageObject.MESSAGE_SEND_STATE_SEND_ERROR;
                 getNotificationCenter().postNotificationName(NotificationCenter.messageSendError, obj.getId());
                 processSentMessage(obj.getId());
@@ -917,9 +993,6 @@ public class SendMessagesHelper extends BaseController implements NotificationCe
                                     media.file = file;
                                     MessageObject messageObject = (MessageObject) message.extraHashMap.get(location + "_i");
                                     int index = message.messageObjects.indexOf(messageObject);
-                                    if (index >= 0) {
-                                        stopVideoService(message.messageObjects.get(index).messageOwner.attachPath);
-                                    }
                                     message.photoSize = (TLRPC.PhotoSize) message.extraHashMap.get(location + "_t");
                                     if (media.thumb == null && message.photoSize != null && message.photoSize.location != null) {
                                         message.performMediaUpload = true;
@@ -948,9 +1021,7 @@ public class SendMessagesHelper extends BaseController implements NotificationCe
                             if (index >= 0) {
                                 req.files.set(index, encryptedFile);
                                 if (inputEncryptedFile.id == 1) {
-                                    MessageObject messageObject = (MessageObject) message.extraHashMap.get(location + "_i");
                                     message.photoSize = (TLRPC.PhotoSize) message.extraHashMap.get(location + "_t");
-                                    stopVideoService(message.messageObjects.get(index).messageOwner.attachPath);
                                 }
                                 decryptedMessage = req.messages.get(index);
                             }
@@ -1045,10 +1116,10 @@ public class SendMessagesHelper extends BaseController implements NotificationCe
             String finalPath = (String) args[1];
             long availableSize = (Long) args[2];
             long finalSize = (Long) args[3];
+            Float progress = (Float) args[4];
             boolean isEncrypted = DialogObject.isEncryptedDialog(messageObject.getDialogId());
-            getFileLoader().checkUploadNewDataAvailable(finalPath, isEncrypted, availableSize, finalSize);
+            getFileLoader().checkUploadNewDataAvailable(finalPath, isEncrypted, availableSize, finalSize, progress);
             if (finalSize != 0) {
-                stopVideoService(messageObject.messageOwner.attachPath);
                 ArrayList<DelayedMessage> arr = delayedMessages.get(messageObject.messageOwner.attachPath);
                 if (arr != null) {
                     for (int a = 0; a < arr.size(); a++) {
@@ -1063,7 +1134,15 @@ public class SendMessagesHelper extends BaseController implements NotificationCe
 
                                     ArrayList<TLRPC.Message> messages = new ArrayList<>();
                                     messages.add(obj.messageOwner);
-                                    getMessagesStorage().putMessages(messages, false, true, false, 0, obj.scheduled, 0);
+                                    int threadMessageId = 0;
+                                    int mode = 0;
+                                    if (obj.isQuickReply()) {
+                                        mode = ChatActivity.MODE_QUICK_REPLIES;
+                                        threadMessageId = obj.getQuickReplyId();
+                                    } else if (obj.scheduled) {
+                                        mode = ChatActivity.MODE_SCHEDULED;
+                                    }
+                                    getMessagesStorage().putMessages(messages, false, true, false, 0, mode, threadMessageId);
                                     break;
                                 }
                             }
@@ -1074,7 +1153,15 @@ public class SendMessagesHelper extends BaseController implements NotificationCe
 
                             ArrayList<TLRPC.Message> messages = new ArrayList<>();
                             messages.add(message.obj.messageOwner);
-                            getMessagesStorage().putMessages(messages, false, true, false, 0, message.obj.scheduled, 0);
+                            int threadMessageId = 0;
+                            int mode = 0;
+                            if (message.obj.isQuickReply()) {
+                                mode = ChatActivity.MODE_QUICK_REPLIES;
+                                threadMessageId = message.obj.getQuickReplyId();
+                            } else if (message.obj.scheduled) {
+                                mode = ChatActivity.MODE_SCHEDULED;
+                            }
+                            getMessagesStorage().putMessages(messages, false, true, false, 0, mode, threadMessageId);
                             break;
                         }
                     }
@@ -1086,7 +1173,6 @@ public class SendMessagesHelper extends BaseController implements NotificationCe
                 return;
             }
             String finalPath = (String) args[1];
-            stopVideoService(messageObject.messageOwner.attachPath);
 
             ArrayList<DelayedMessage> arr = delayedMessages.get(finalPath);
             if (arr != null) {
@@ -1146,7 +1232,7 @@ public class SendMessagesHelper extends BaseController implements NotificationCe
                                     messageObject.messageOwner.attachPath = cacheFile.toString();
                                     ArrayList<TLRPC.Message> messages = new ArrayList<>();
                                     messages.add(messageObject.messageOwner);
-                                    getMessagesStorage().putMessages(messages, false, true, false, 0, messageObject.scheduled, 0);
+                                    getMessagesStorage().putMessages(messages, false, true, false, 0, messageObject.scheduled ? 1 : 0, 0);
                                     getNotificationCenter().postNotificationName(NotificationCenter.updateMessageMedia, messageObject.messageOwner);
                                     message.photoSize = photo.sizes.get(photo.sizes.size() - 1);
                                     message.locationParent = photo;
@@ -1195,7 +1281,7 @@ public class SendMessagesHelper extends BaseController implements NotificationCe
                                 }
                                 ArrayList<TLRPC.Message> messages = new ArrayList<>();
                                 messages.add(messageObject.messageOwner);
-                                getMessagesStorage().putMessages(messages, false, true, false, 0, messageObject.scheduled, 0);
+                                getMessagesStorage().putMessages(messages, false, true, false, 0, messageObject.scheduled ? 1 : 0, 0);
                                 message.performMediaUpload = true;
                                 performSendDelayedMessage(message);
                                 getNotificationCenter().postNotificationName(NotificationCenter.updateMessageMedia, message.obj.messageOwner);
@@ -1258,7 +1344,7 @@ public class SendMessagesHelper extends BaseController implements NotificationCe
 
         ArrayList<TLRPC.Message> arr = new ArrayList<>();
         arr.add(object.messageOwner);
-        getMessagesStorage().putMessages(arr, false, true, false, 0, object.scheduled, 0);
+        getMessagesStorage().putMessages(arr, false, true, false, 0, object.scheduled ? 1 : 0, 0);
 
         ArrayList<MessageObject> arrayList = new ArrayList<>();
         arrayList.add(object);
@@ -1278,6 +1364,7 @@ public class SendMessagesHelper extends BaseController implements NotificationCe
         boolean enc = false;
         boolean scheduled = false;
         long dialogId = 0;
+        int topicId = 0;
         for (int c = 0; c < objects.size(); c++) {
             MessageObject object = objects.get(c);
             if (object.scheduled) {
@@ -1285,6 +1372,9 @@ public class SendMessagesHelper extends BaseController implements NotificationCe
             }
             dialogId = object.getDialogId();
             messageIds.add(object.getId());
+            if (object.isQuickReply()) {
+                topicId = object.getQuickReplyId();
+            }
             TLRPC.Message sendingMessage = removeFromSendingMessages(object.getId(), object.scheduled);
             if (sendingMessage != null) {
                 getConnectionsManager().cancelRequest(sendingMessage.reqId, true);
@@ -1336,7 +1426,7 @@ public class SendMessagesHelper extends BaseController implements NotificationCe
 
                                     TLRPC.TL_messages_messages messagesRes = new TLRPC.TL_messages_messages();
                                     messagesRes.messages.add(prevMessage.messageOwner);
-                                    getMessagesStorage().putMessages(messagesRes, message.peer, -2, 0, false, scheduled, 0);
+                                    getMessagesStorage().putMessages(messagesRes, message.peer, -2, 0, false, scheduled ? 1 : 0, 0);
                                 }
                                 if (!checkReadyToSendGroups.contains(message)) {
                                     checkReadyToSendGroups.add(message);
@@ -1367,7 +1457,6 @@ public class SendMessagesHelper extends BaseController implements NotificationCe
             } else {
                 getFileLoader().cancelFileUpload(key, enc);
             }
-            stopVideoService(key);
             delayedMessages.remove(key);
         }
         for (int a = 0, N = checkReadyToSendGroups.size(); a < N; a++) {
@@ -1376,7 +1465,13 @@ public class SendMessagesHelper extends BaseController implements NotificationCe
         if (objects.size() == 1 && objects.get(0).isEditing() && objects.get(0).previousMedia != null) {
             revertEditingMessageObject(objects.get(0));
         } else {
-            getMessagesController().deleteMessages(messageIds, null, null, dialogId, false, scheduled);
+            int mode = 0;
+            if (!objects.isEmpty() && objects.get(0).isQuickReply()) {
+                mode = ChatActivity.MODE_QUICK_REPLIES;
+            } else if (scheduled) {
+                mode = ChatActivity.MODE_SCHEDULED;
+            }
+            getMessagesController().deleteMessages(messageIds, null, null, dialogId, topicId, false, mode);
         }
     }
 
@@ -1391,7 +1486,7 @@ public class SendMessagesHelper extends BaseController implements NotificationCe
             int enc_id = DialogObject.getEncryptedChatId(messageObject.getDialogId());
             TLRPC.EncryptedChat encryptedChat = getMessagesController().getEncryptedChat(enc_id);
             if (encryptedChat == null) {
-                getMessagesStorage().markMessageAsSendError(messageObject.messageOwner, messageObject.scheduled);
+                getMessagesStorage().markMessageAsSendError(messageObject.messageOwner, messageObject.scheduled ? 1 : 0);
                 messageObject.messageOwner.send_state = MessageObject.MESSAGE_SEND_STATE_SEND_ERROR;
                 getNotificationCenter().postNotificationName(NotificationCenter.messageSendError, messageObject.getId());
                 processSentMessage(messageObject.getId());
@@ -1435,7 +1530,7 @@ public class SendMessagesHelper extends BaseController implements NotificationCe
         if (unsent) {
             unsentMessages.put(messageObject.getId(), messageObject);
         }
-        sendMessage(messageObject);
+        sendMessage(SendMessagesHelper.SendMessageParams.of(messageObject));
         return true;
     }
 
@@ -1458,18 +1553,18 @@ public class SendMessagesHelper extends BaseController implements NotificationCe
                 params.put("parentObject", "sent_" + messageObject.messageOwner.peer_id.channel_id + "_" + messageObject.getId() + "_" + messageObject.getDialogId() + "_" + messageObject.type + "_" + messageObject.getSize());
             }
             if (messageObject.messageOwner.media.photo instanceof TLRPC.TL_photo) {
-                sendMessage((TLRPC.TL_photo) messageObject.messageOwner.media.photo, null, did, messageObject.replyMessageObject, null, messageObject.messageOwner.message, messageObject.messageOwner.entities, null, params, true, 0, messageObject.messageOwner.media.ttl_seconds, messageObject, false);
+                sendMessage(SendMessagesHelper.SendMessageParams.of((TLRPC.TL_photo) messageObject.messageOwner.media.photo, null, did, messageObject.replyMessageObject, null, messageObject.messageOwner.message, messageObject.messageOwner.entities, null, params, true, 0, messageObject.messageOwner.media.ttl_seconds, messageObject, false));
             } else if (messageObject.messageOwner.media.document instanceof TLRPC.TL_document) {
-                sendMessage((TLRPC.TL_document) messageObject.messageOwner.media.document, null, messageObject.messageOwner.attachPath, did, messageObject.replyMessageObject, null, messageObject.messageOwner.message, messageObject.messageOwner.entities, null, params, true, 0, messageObject.messageOwner.media.ttl_seconds, messageObject, null, false);
+                sendMessage(SendMessagesHelper.SendMessageParams.of((TLRPC.TL_document) messageObject.messageOwner.media.document, null, messageObject.messageOwner.attachPath, did, messageObject.replyMessageObject, null, messageObject.messageOwner.message, messageObject.messageOwner.entities, null, params, true, 0, messageObject.messageOwner.media.ttl_seconds, messageObject, null, false));
             } else if (messageObject.messageOwner.media instanceof TLRPC.TL_messageMediaVenue || messageObject.messageOwner.media instanceof TLRPC.TL_messageMediaGeo) {
-                sendMessage(messageObject.messageOwner.media, did, messageObject.replyMessageObject, null, null, null, true, 0);
+                sendMessage(SendMessagesHelper.SendMessageParams.of(messageObject.messageOwner.media, did, messageObject.replyMessageObject, null, null, null, true, 0));
             } else if (messageObject.messageOwner.media.phone_number != null) {
                 TLRPC.User user = new TLRPC.TL_userContact_old2();
                 user.phone = messageObject.messageOwner.media.phone_number;
                 user.first_name = messageObject.messageOwner.media.first_name;
                 user.last_name = messageObject.messageOwner.media.last_name;
                 user.id = messageObject.messageOwner.media.user_id;
-                sendMessage(user, did, messageObject.replyMessageObject, null, null, null, true, 0);
+                sendMessage(SendMessagesHelper.SendMessageParams.of(user, did, messageObject.replyMessageObject, null, null, null, true, 0));
             } else if (!DialogObject.isEncryptedDialog(did)) {
                 ArrayList<MessageObject> arrayList = new ArrayList<>();
                 arrayList.add(messageObject);
@@ -1498,7 +1593,7 @@ public class SendMessagesHelper extends BaseController implements NotificationCe
             } else {
                 entities = null;
             }
-            sendMessage(messageObject.messageOwner.message, did, messageObject.replyMessageObject, null, webPage, true, entities, null, null, true, 0, null, false);
+            sendMessage(SendMessagesHelper.SendMessageParams.of(messageObject.messageOwner.message, did, messageObject.replyMessageObject, null, webPage, true, entities, null, null, true, 0, null, false));
         } else if (DialogObject.isEncryptedDialog(did)) {
             ArrayList<MessageObject> arrayList = new ArrayList<>();
             arrayList.add(messageObject);
@@ -1518,7 +1613,7 @@ public class SendMessagesHelper extends BaseController implements NotificationCe
         TLRPC.Message message;
         if (resendMessage != null) {
             message = resendMessage;
-            req.reply_to_msg_id = messageId;
+            req.reply_to = createReplyInput(messageId);
             req.random_id = resendMessage.random_id;
         } else {
             message = new TLRPC.TL_messageService();
@@ -1532,6 +1627,7 @@ public class SendMessagesHelper extends BaseController implements NotificationCe
             message.flags |= 256;
             message.flags |= 8;
             message.reply_to = new TLRPC.TL_messageReplyHeader();
+            message.reply_to.flags |= 16;
             message.reply_to.reply_to_msg_id = messageId;
             message.peer_id = new TLRPC.TL_peerUser();
             message.peer_id.user_id = user.id;
@@ -1546,16 +1642,16 @@ public class SendMessagesHelper extends BaseController implements NotificationCe
         newMsgObj.wasJustSent = true;
         ArrayList<MessageObject> objArr = new ArrayList<>();
         objArr.add(newMsgObj);
-        getMessagesController().updateInterfaceWithMessages(message.dialog_id, objArr, false);
+        getMessagesController().updateInterfaceWithMessages(message.dialog_id, objArr, 0);
         getNotificationCenter().postNotificationName(NotificationCenter.dialogsNeedReload);
         ArrayList<TLRPC.Message> arr = new ArrayList<>();
         arr.add(message);
-        getMessagesStorage().putMessages(arr, false, true, false, 0, false, 0);
+        getMessagesStorage().putMessages(arr, false, true, false, 0, false, 0, 0);
 
         performSendMessageRequest(req, newMsgObj, null, null, null, null, false);
     }
 
-    public void sendSticker(TLRPC.Document document, String query, long peer, MessageObject replyToMsg, MessageObject replyToTopMsg, Object parentObject, MessageObject.SendAnimationData sendAnimationData, boolean notify, int scheduleDate, boolean updateStickersOrder) {
+    public void sendSticker(TLRPC.Document document, String query, long peer, MessageObject replyToMsg, MessageObject replyToTopMsg, TL_stories.StoryItem storyItem, ChatActivity.ReplyQuote quote, MessageObject.SendAnimationData sendAnimationData, boolean notify, int scheduleDate, boolean updateStickersOrder, Object parentObject, String quick_reply_shortcut, int quick_reply_shortcut_id) {
         if (document == null) {
             return;
         }
@@ -1653,7 +1749,12 @@ public class SendMessagesHelper extends BaseController implements NotificationCe
                     if (bitmapFinal[0] != null && keyFinal[0] != null) {
                         ImageLoader.getInstance().putImageToCache(new BitmapDrawable(bitmapFinal[0]), keyFinal[0], false);
                     }
-                    sendMessage((TLRPC.TL_document) finalDocument, null, null, peer, replyToMsg, replyToTopMsg, null, null, null, null, notify, scheduleDate, 0, parentObject, sendAnimationData, false);
+                    SendMessageParams sendMessageParams = SendMessageParams.of((TLRPC.TL_document) finalDocument, null, null, peer, replyToMsg, replyToTopMsg, null, null, null, null, notify, scheduleDate, 0, parentObject, sendAnimationData, false);
+                    sendMessageParams.replyToStoryItem = storyItem;
+                    sendMessageParams.replyQuote = quote;
+                    sendMessageParams.quick_reply_shortcut = quick_reply_shortcut;
+                    sendMessageParams.quick_reply_shortcut_id = quick_reply_shortcut_id;
+                    sendMessage(sendMessageParams);
                 });
             });
         } else {
@@ -1664,7 +1765,12 @@ public class SendMessagesHelper extends BaseController implements NotificationCe
             } else {
                 params = null;
             }
-            sendMessage((TLRPC.TL_document) finalDocument, null, null, peer, replyToMsg, replyToTopMsg, null, null, null, params, notify, scheduleDate, 0, parentObject, sendAnimationData, updateStickersOrder);
+            SendMessageParams sendMessageParams = SendMessageParams.of((TLRPC.TL_document) finalDocument, null, null, peer, replyToMsg, replyToTopMsg, null, null, null, params, notify, scheduleDate, 0, parentObject, sendAnimationData, updateStickersOrder);
+            sendMessageParams.replyToStoryItem = storyItem;
+            sendMessageParams.replyQuote = quote;
+            sendMessageParams.quick_reply_shortcut = quick_reply_shortcut;
+            sendMessageParams.quick_reply_shortcut_id = quick_reply_shortcut_id;
+            sendMessage(sendMessageParams);
         }
     }
 
@@ -1747,7 +1853,10 @@ public class SendMessagesHelper extends BaseController implements NotificationCe
                 if (msgObj.getId() <= 0 || msgObj.needDrawBluredPreview()) {
                     if (msgObj.type == MessageObject.TYPE_TEXT && !TextUtils.isEmpty(msgObj.messageText)) {
                         TLRPC.WebPage webPage = msgObj.messageOwner.media != null ? msgObj.messageOwner.media.webpage : null;
-                        sendMessage(msgObj.messageText.toString(), peer, null, replyToTopMsg, webPage, webPage != null, msgObj.messageOwner.entities, null, null, notify, scheduleDate, null, false);
+                        SendMessageParams params = SendMessageParams.of(msgObj.messageText.toString(), peer, null, replyToTopMsg, webPage, webPage != null, msgObj.messageOwner.entities, null, null, notify, scheduleDate, null, false);
+                        params.quick_reply_shortcut = msgObj.getQuickReplyName();
+                        params.quick_reply_shortcut_id = msgObj.getQuickReplyId();
+                        sendMessage(params);
                     }
                     continue;
                 }
@@ -2020,6 +2129,15 @@ public class SendMessagesHelper extends BaseController implements NotificationCe
                         newMsg.media_unread = true;
                     }
                 }
+                if (replyToTopMsg == null && msgObj.messageOwner.reply_to != null) {
+                    if (
+                        !(msgObj.messageOwner.reply_to.reply_to_peer_id == null || MessageObject.peersEqual(msgObj.messageOwner.reply_to.reply_to_peer_id, msgObj.messageOwner.peer_id)) ||
+                        ids != null && (msgObj.messageOwner.reply_to.flags & 16) != 0 && ids.contains(msgObj.messageOwner.reply_to.reply_to_msg_id)
+                    ) {
+                        newMsg.flags |= 8;
+                        newMsg.reply_to = msgObj.messageOwner.reply_to;
+                    }
+                }
                 MessageObject newMsgObj = new MessageObject(currentAccount, newMsg, true, true);
                 newMsgObj.scheduled = scheduleDate != 0;
                 newMsgObj.messageOwner.send_state = MessageObject.MESSAGE_SEND_STATE_SENDING;
@@ -2046,6 +2164,7 @@ public class SendMessagesHelper extends BaseController implements NotificationCe
 
                 if (replyToTopMsg != null) {
                     newMsg.reply_to = new TLRPC.TL_messageReplyHeader();
+                    newMsg.reply_to.flags |= 16;
                     newMsg.reply_to.reply_to_msg_id = replyToTopMsg.getId();
                     if (replyToTopMsg.isTopicMainMessage) {
                         newMsg.reply_to.forum_topic = true;
@@ -2054,8 +2173,8 @@ public class SendMessagesHelper extends BaseController implements NotificationCe
                 }
 
                 if (arr.size() == 100 || a == messages.size() - 1 || a != messages.size() - 1 && messages.get(a + 1).getDialogId() != msgObj.getDialogId()) {
-                    getMessagesStorage().putMessages(new ArrayList<>(arr), false, true, false, 0, scheduleDate != 0, 0);
-                    getMessagesController().updateInterfaceWithMessages(peer, objArr, scheduleDate != 0);
+                    getMessagesStorage().putMessages(new ArrayList<>(arr), false, true, false, 0, scheduleDate != 0 ? 1 : 0, 0);
+                    getMessagesController().updateInterfaceWithMessages(peer, objArr, scheduleDate != 0 ? 1 : 0);
                     getNotificationCenter().postNotificationName(NotificationCenter.dialogsNeedReload);
                     getUserConfig().saveConfig(false);
 
@@ -2103,6 +2222,7 @@ public class SendMessagesHelper extends BaseController implements NotificationCe
                                     a1--;
                                 }
                             }
+                            getNotificationCenter().postNotificationNameOnUIThread(NotificationCenter.savedMessagesForwarded, newMessagesByIds);
                             Integer value = getMessagesController().dialogs_read_outbox_max.get(peer);
                             if (value == null) {
                                 value = getMessagesStorage().getDialogReadMax(true, peer);
@@ -2112,7 +2232,7 @@ public class SendMessagesHelper extends BaseController implements NotificationCe
                             int sentCount = 0;
                             for (int a1 = 0; a1 < updates.updates.size(); a1++) {
                                 TLRPC.Update update = updates.updates.get(a1);
-                                if (update instanceof TLRPC.TL_updateNewMessage || update instanceof TLRPC.TL_updateNewChannelMessage || update instanceof TLRPC.TL_updateNewScheduledMessage) {
+                                if (update instanceof TLRPC.TL_updateNewMessage || update instanceof TLRPC.TL_updateNewChannelMessage || update instanceof TLRPC.TL_updateNewScheduledMessage || update instanceof TLRPC.TL_updateQuickReplyMessage) {
 
                                     boolean currentSchedule = scheduleDate != 0;
 
@@ -2126,6 +2246,10 @@ public class SendMessagesHelper extends BaseController implements NotificationCe
                                     } else if (update instanceof TLRPC.TL_updateNewScheduledMessage) {
                                         TLRPC.TL_updateNewScheduledMessage updateNewMessage = (TLRPC.TL_updateNewScheduledMessage) update;
                                         message = updateNewMessage.message;
+                                    } else if (update instanceof TLRPC.TL_updateQuickReplyMessage) {
+                                        QuickRepliesController.getInstance(currentAccount).processUpdate(update, null, 0);
+                                        TLRPC.TL_updateQuickReplyMessage updateQuickReplyMessage = (TLRPC.TL_updateQuickReplyMessage) update;
+                                        message = updateQuickReplyMessage.message;
                                     } else {
                                         TLRPC.TL_updateNewChannelMessage updateNewChannelMessage = (TLRPC.TL_updateNewChannelMessage) update;
                                         message = updateNewChannelMessage.message;
@@ -2173,13 +2297,13 @@ public class SendMessagesHelper extends BaseController implements NotificationCe
                                             AndroidUtilities.runOnUIThread(() -> {
                                                 ArrayList<Integer> messageIds = new ArrayList<>();
                                                 messageIds.add(oldId);
-                                                getMessagesController().deleteMessages(messageIds, null, null, newMsgObj1.dialog_id, false, true);
+                                                getMessagesController().deleteMessages(messageIds, null, null, newMsgObj1.dialog_id, newMsgObj1.quick_reply_shortcut_id, false, ChatActivity.MODE_SCHEDULED);
                                                 getMessagesStorage().getStorageQueue().postRunnable(() -> {
-                                                    getMessagesStorage().putMessages(sentMessages, true, false, false, 0, false, 0);
+                                                    getMessagesStorage().putMessages(sentMessages, true, false, false, 0, 0, 0);
                                                     AndroidUtilities.runOnUIThread(() -> {
                                                         ArrayList<MessageObject> messageObjects = new ArrayList<>();
                                                         messageObjects.add(new MessageObject(msgObj.currentAccount, msgObj.messageOwner, true, true));
-                                                        getMessagesController().updateInterfaceWithMessages(newMsgObj1.dialog_id, messageObjects, false);
+                                                        getMessagesController().updateInterfaceWithMessages(newMsgObj1.dialog_id, messageObjects, 0);
                                                         getMediaDataController().increasePeerRaiting(newMsgObj1.dialog_id);
                                                         processSentMessage(oldId);
                                                         removeFromSendingMessages(oldId, scheduleDate != 0);
@@ -2188,8 +2312,12 @@ public class SendMessagesHelper extends BaseController implements NotificationCe
                                             });
                                         } else {
                                             getMessagesStorage().getStorageQueue().postRunnable(() -> {
-                                                getMessagesStorage().updateMessageStateAndId(newMsgObj1.random_id, MessageObject.getPeerId(peer_id), oldId, newMsgObj1.id, 0, false, scheduleDate != 0 ? 1 : 0);
-                                                getMessagesStorage().putMessages(sentMessages, true, false, false, 0, scheduleDate != 0, 0);
+                                                int mode = scheduleDate != 0 ? ChatActivity.MODE_SCHEDULED : 0;
+                                                if (message.quick_reply_shortcut_id != 0 || message.quick_reply_shortcut != null) {
+                                                    mode = ChatActivity.MODE_QUICK_REPLIES;
+                                                }
+                                                getMessagesStorage().updateMessageStateAndId(newMsgObj1.random_id, MessageObject.getPeerId(peer_id), oldId, newMsgObj1.id, 0, false, scheduleDate != 0 ? 1 : 0, message.quick_reply_shortcut_id);
+                                                getMessagesStorage().putMessages(sentMessages, true, false, false, 0, mode, message.quick_reply_shortcut_id);
                                                 AndroidUtilities.runOnUIThread(() -> {
                                                     newMsgObj1.send_state = MessageObject.MESSAGE_SEND_STATE_SENT;
                                                     getMediaDataController().increasePeerRaiting(peer);
@@ -2211,7 +2339,7 @@ public class SendMessagesHelper extends BaseController implements NotificationCe
                         }
                         for (int a1 = 0; a1 < newMsgObjArr.size(); a1++) {
                             final TLRPC.Message newMsgObj1 = newMsgObjArr.get(a1);
-                            getMessagesStorage().markMessageAsSendError(newMsgObj1, scheduleDate != 0);
+                            getMessagesStorage().markMessageAsSendError(newMsgObj1, scheduleDate != 0 ? 1 : 0);
                             AndroidUtilities.runOnUIThread(() -> {
                                 newMsgObj1.send_state = MessageObject.MESSAGE_SEND_STATE_SEND_ERROR;
                                 getNotificationCenter().postNotificationName(NotificationCenter.messageSendError, newMsgObj1.id);
@@ -2456,7 +2584,7 @@ public class SendMessagesHelper extends BaseController implements NotificationCe
 
                 ArrayList<TLRPC.Message> arr = new ArrayList<>();
                 arr.add(newMsg);
-                getMessagesStorage().putMessages(arr, false, true, false, 0, messageObject.scheduled, MessageObject.getTopicId(newMsg, getMessagesController().isForum(newMsg)));
+                getMessagesStorage().putMessages(arr, false, true, false, 0, messageObject.scheduled ? 1 : 0, 0);
                 getMessagesController().getTopicsController().processEditedMessage(newMsg);
 
                 messageObject.type = -1;
@@ -2485,7 +2613,15 @@ public class SendMessagesHelper extends BaseController implements NotificationCe
             if (type >= 1 && type <= 3 || type >= 5 && type <= 8) {
                 TLRPC.InputMedia inputMedia = null;
                 if (type == 1) {
-
+                    if ((newMsg.media == null || newMsg.media instanceof TLRPC.TL_messageMediaEmpty || newMsg.media != null && newMsg.media.webpage instanceof TLRPC.TL_webPageEmpty) && !messageObject.editingMessageSearchWebPage) {
+                        inputMedia = new TLRPC.TL_inputMediaEmpty();
+                    } else if (newMsg != null && newMsg.media != null && newMsg.media.webpage != null) {
+                        TLRPC.TL_inputMediaWebPage inputWebpage = new TLRPC.TL_inputMediaWebPage();
+                        inputWebpage.url = newMsg.media.webpage.url;
+                        inputWebpage.force_small_media = newMsg.media.force_small_media;
+                        inputWebpage.force_large_media = newMsg.media.force_large_media;
+                        inputMedia = inputWebpage;
+                    }
                 } else if (type == 2) {
                     TLRPC.TL_inputMediaUploadedPhoto uploadedPhoto = new TLRPC.TL_inputMediaUploadedPhoto();
                     uploadedPhoto.spoiler = hasMediaSpoilers;
@@ -2630,6 +2766,7 @@ public class SendMessagesHelper extends BaseController implements NotificationCe
                 TLRPC.TL_messages_editMessage request = new TLRPC.TL_messages_editMessage();
                 request.id = messageObject.getId();
                 request.peer = getMessagesController().getInputPeer(peer);
+                request.invert_media = messageObject.messageOwner.invert_media;
                 if (inputMedia != null) {
                     request.flags |= 16384;
                     request.media = inputMedia;
@@ -2637,6 +2774,10 @@ public class SendMessagesHelper extends BaseController implements NotificationCe
                 if (messageObject.scheduled) {
                     request.schedule_date = messageObject.messageOwner.date;
                     request.flags |= 32768;
+                }
+                if ((messageObject.messageOwner.flags & 1073741824) != 0) {
+                    request.quick_reply_shortcut_id = messageObject.messageOwner.quick_reply_shortcut_id;
+                    request.flags |= 131072;
                 }
                 if (messageObject.editingMessage != null) {
                     request.message = messageObject.editingMessage.toString();
@@ -2711,6 +2852,10 @@ public class SendMessagesHelper extends BaseController implements NotificationCe
             req.no_webpage = !searchLinks;
         }
         req.id = messageObject.getId();
+        if (messageObject.messageOwner != null && (messageObject.messageOwner.flags & 1073741824) != 0) {
+            req.quick_reply_shortcut_id = messageObject.messageOwner.quick_reply_shortcut_id;
+            req.flags |= 131072;
+        }
         if (entities != null) {
             req.entities = entities;
             req.flags |= 8;
@@ -2735,7 +2880,7 @@ public class SendMessagesHelper extends BaseController implements NotificationCe
         mediaGeo.geo._long = AndroidUtilities.fixLocationCoord(location.getLongitude());
         for (HashMap.Entry<String, MessageObject> entry : waitingForLocation.entrySet()) {
             MessageObject messageObject = entry.getValue();
-            sendMessage(mediaGeo, messageObject.getDialogId(), messageObject, null, null, null, true, 0);
+            sendMessage(SendMessagesHelper.SendMessageParams.of(mediaGeo, messageObject.getDialogId(), messageObject, null, null, null, true, 0));
         }
     }
 
@@ -2863,7 +3008,7 @@ public class SendMessagesHelper extends BaseController implements NotificationCe
         return voteSendTime.get(pollId, 0L);
     }
 
-    public void sendReaction(MessageObject messageObject, ArrayList<ReactionsLayoutInBubble.VisibleReaction> visibleReactions, ReactionsLayoutInBubble.VisibleReaction addedReaction, boolean big, boolean addToRecent, ChatActivity parentFragment, Runnable callback) {
+    public void sendReaction(MessageObject messageObject, ArrayList<ReactionsLayoutInBubble.VisibleReaction> visibleReactions, ReactionsLayoutInBubble.VisibleReaction addedReaction, boolean big, boolean addToRecent, BaseFragment parentFragment, Runnable callback) {
         if (messageObject == null || parentFragment == null) {
             return;
         }
@@ -3062,7 +3207,7 @@ public class SendMessagesHelper extends BaseController implements NotificationCe
                         builder.setMessage(AndroidUtilities.replaceTags(LocaleController.formatString("BotOwnershipTransferReadyAlertText", R.string.BotOwnershipTransferReadyAlertText)));
                         builder.setPositiveButton(LocaleController.getString("BotOwnershipTransferChangeOwner", R.string.BotOwnershipTransferChangeOwner), (dialogInterface, i) -> {
                             TwoStepVerificationActivity fragment = new TwoStepVerificationActivity();
-                            fragment.setDelegate(password -> sendCallback(cache, messageObject, button, password, fragment, parentFragment));
+                            fragment.setDelegate(0, password -> sendCallback(cache, messageObject, button, password, fragment, parentFragment));
                             parentFragment.presentFragment(fragment);
                         });
                         builder.setNegativeButton(LocaleController.getString("Cancel", R.string.Cancel), null);
@@ -3181,19 +3326,11 @@ public class SendMessagesHelper extends BaseController implements NotificationCe
                     inputInvoice.msg_id = messageObject.getId();
                     inputInvoice.peer = getMessagesController().getInputPeer(messageObject.messageOwner.peer_id);
                     req.invoice = inputInvoice;
-                    try {
-                        JSONObject jsonObject = new JSONObject();
-                        jsonObject.put("bg_color", Theme.getColor(Theme.key_windowBackgroundWhite));
-                        jsonObject.put("text_color", Theme.getColor(Theme.key_windowBackgroundWhiteBlackText));
-                        jsonObject.put("hint_color", Theme.getColor(Theme.key_windowBackgroundWhiteHintText));
-                        jsonObject.put("link_color", Theme.getColor(Theme.key_windowBackgroundWhiteLinkText));
-                        jsonObject.put("button_color", Theme.getColor(Theme.key_featuredStickers_addButton));
-                        jsonObject.put("button_text_color", Theme.getColor(Theme.key_featuredStickers_buttonText));
+                    final JSONObject themeParams = BotWebViewSheet.makeThemeParams(null);
+                    if (themeParams != null) {
                         req.theme_params = new TLRPC.TL_dataJSON();
-                        req.theme_params.data = jsonObject.toString();
+                        req.theme_params.data = themeParams.toString();
                         req.flags |= 1;
-                    } catch (Exception e) {
-                        FileLog.e(e);
                     }
                     getConnectionsManager().sendRequest(req, requestDelegate, ConnectionsManager.RequestFlagFailOnServerErrors);
                 } else {
@@ -3284,55 +3421,42 @@ public class SendMessagesHelper extends BaseController implements NotificationCe
         });
     }
 
-    public void sendMessage(MessageObject retryMessageObject) {
-        sendMessage(null, null, null, null, null, null, null, null, null, null, retryMessageObject.getDialogId(), retryMessageObject.messageOwner.attachPath, null, null, null, true, retryMessageObject, null, retryMessageObject.messageOwner.reply_markup, retryMessageObject.messageOwner.params, !retryMessageObject.messageOwner.silent, retryMessageObject.scheduled ? retryMessageObject.messageOwner.date : 0, 0, null, null, false);
-    }
+    public void sendMessage(SendMessageParams sendMessageParams) {
+        String message = sendMessageParams.message;
+        String caption = sendMessageParams.caption;
+        TLRPC.MessageMedia location = sendMessageParams.location;
+        TLRPC.TL_photo photo = sendMessageParams.photo;
+        VideoEditedInfo videoEditedInfo = sendMessageParams.videoEditedInfo;
+        TLRPC.User user = sendMessageParams.user;
+        TLRPC.TL_document document = sendMessageParams.document;
+        TLRPC.TL_game game = sendMessageParams.game;
+        TLRPC.TL_messageMediaPoll poll = sendMessageParams.poll;
+        TLRPC.TL_messageMediaInvoice invoice = sendMessageParams.invoice;
+        long peer = sendMessageParams.peer;
+        String path = sendMessageParams.path;
+        MessageObject replyToMsg = sendMessageParams.replyToMsg;
+        MessageObject replyToTopMsg = sendMessageParams.replyToTopMsg;
+        TLRPC.WebPage webPage = sendMessageParams.webPage;
+        TLRPC.TL_messageMediaWebPage mediaWebPage = sendMessageParams.mediaWebPage;
+        boolean searchLinks = sendMessageParams.searchLinks;
+        MessageObject retryMessageObject = sendMessageParams.retryMessageObject;
+        ArrayList<TLRPC.MessageEntity> entities = sendMessageParams.entities;
+        TLRPC.ReplyMarkup replyMarkup = sendMessageParams.replyMarkup;
+        HashMap<String, String> params = sendMessageParams.params;
+        boolean notify = sendMessageParams.notify;
+        int scheduleDate = sendMessageParams.scheduleDate;
+        int ttl = sendMessageParams.ttl;
+        Object parentObject = sendMessageParams.parentObject;
+        MessageObject.SendAnimationData sendAnimationData = sendMessageParams.sendAnimationData;
+        boolean updateStickersOrder = sendMessageParams.updateStickersOrder;
+        boolean hasMediaSpoilers = sendMessageParams.hasMediaSpoilers;
+        TL_stories.StoryItem replyToStoryItem = sendMessageParams.replyToStoryItem;
+        TL_stories.StoryItem sendingStory = sendMessageParams.sendingStory;
+        ChatActivity.ReplyQuote replyQuote = sendMessageParams.replyQuote;
+        boolean invert_media = sendMessageParams.invert_media;
+        String quick_reply_shortcut = sendMessageParams.quick_reply_shortcut;
+        int quick_reply_shortcut_id = sendMessageParams.quick_reply_shortcut_id;
 
-    public void sendMessage(TLRPC.User user, long peer, MessageObject replyToMsg, MessageObject replyToTopMsg, TLRPC.ReplyMarkup replyMarkup, HashMap<String, String> params, boolean notify, int scheduleDate) {
-        sendMessage(null, null, null, null, null, user, null, null, null, null, peer, null, replyToMsg, replyToTopMsg, null, true, null, null, replyMarkup, params, notify, scheduleDate, 0, null, null, false);
-    }
-
-    public void sendMessage(TLRPC.TL_messageMediaInvoice invoice, long peer, MessageObject replyToMsg, MessageObject replyToTopMsg, TLRPC.ReplyMarkup replyMarkup, HashMap<String, String> params, boolean notify, int scheduleDate) {
-        sendMessage(null, null, null, null, null, null, null, null, null, invoice, peer, null, replyToMsg, replyToTopMsg, null, true, null, null, replyMarkup, params, notify, scheduleDate, 0, null, null, false);
-    }
-
-    public void sendMessage(TLRPC.TL_document document, VideoEditedInfo videoEditedInfo, String path, long peer, MessageObject replyToMsg, MessageObject replyToTopMsg, String caption, ArrayList<TLRPC.MessageEntity> entities, TLRPC.ReplyMarkup replyMarkup, HashMap<String, String> params, boolean notify, int scheduleDate, int ttl, Object parentObject, MessageObject.SendAnimationData sendAnimationData, boolean updateStickersOrder) {
-        sendMessage(null, caption, null, null, videoEditedInfo, null, document, null, null, null, peer, path, replyToMsg, replyToTopMsg, null, true, null, entities, replyMarkup, params, notify, scheduleDate, ttl, parentObject, sendAnimationData, updateStickersOrder);
-    }
-
-    public void sendMessage(TLRPC.TL_document document, VideoEditedInfo videoEditedInfo, String path, long peer, MessageObject replyToMsg, MessageObject replyToTopMsg, String caption, ArrayList<TLRPC.MessageEntity> entities, TLRPC.ReplyMarkup replyMarkup, HashMap<String, String> params, boolean notify, int scheduleDate, int ttl, Object parentObject, MessageObject.SendAnimationData sendAnimationData, boolean updateStickersOrder, boolean hasMediaSpoilers) {
-        sendMessage(null, caption, null, null, videoEditedInfo, null, document, null, null, null, peer, path, replyToMsg, replyToTopMsg, null, true, null, entities, replyMarkup, params, notify, scheduleDate, ttl, parentObject, sendAnimationData, updateStickersOrder, hasMediaSpoilers);
-    }
-
-    public void sendMessage(String message, long peer, MessageObject replyToMsg, MessageObject replyToTopMsg, TLRPC.WebPage webPage, boolean searchLinks, ArrayList<TLRPC.MessageEntity> entities, TLRPC.ReplyMarkup replyMarkup, HashMap<String, String> params, boolean notify, int scheduleDate, MessageObject.SendAnimationData sendAnimationData, boolean updateStickersOrder) {
-        sendMessage(message, null, null, null, null, null, null, null, null, null, peer, null, replyToMsg, replyToTopMsg, webPage, searchLinks, null, entities, replyMarkup, params, notify, scheduleDate, 0, null, sendAnimationData, updateStickersOrder);
-    }
-
-    public void sendMessage(TLRPC.MessageMedia location, long peer, MessageObject replyToMsg, MessageObject replyToTopMsg, TLRPC.ReplyMarkup replyMarkup, HashMap<String, String> params, boolean notify, int scheduleDate) {
-        sendMessage(null, null, location, null, null, null, null, null, null, null, peer, null, replyToMsg, replyToTopMsg, null, true, null, null, replyMarkup, params, notify, scheduleDate, 0, null, null, false);
-    }
-
-    public void sendMessage(TLRPC.TL_messageMediaPoll poll, long peer, MessageObject replyToMsg, MessageObject replyToTopMsg, TLRPC.ReplyMarkup replyMarkup, HashMap<String, String> params, boolean notify, int scheduleDate) {
-        sendMessage(null, null, null, null, null, null, null, null, poll, null, peer, null, replyToMsg, replyToTopMsg, null, true, null, null, replyMarkup, params, notify, scheduleDate, 0, null, null, false);
-    }
-
-    public void sendMessage(TLRPC.TL_game game, long peer,  MessageObject replyToMsg, MessageObject replyToTopMsg, TLRPC.ReplyMarkup replyMarkup, HashMap<String, String> params, boolean notify, int scheduleDate) {
-        sendMessage(null, null, null, null, null, null, null, game, null, null, peer, null, replyToMsg, replyToTopMsg, null, true, null, null, replyMarkup, params, notify, scheduleDate, 0, null, null, false);
-    }
-
-    public void sendMessage(TLRPC.TL_photo photo, String path, long peer, MessageObject replyToMsg, MessageObject replyToTopMsg, String caption, ArrayList<TLRPC.MessageEntity> entities, TLRPC.ReplyMarkup replyMarkup, HashMap<String, String> params, boolean notify, int scheduleDate, int ttl, Object parentObject, boolean updateStickersOrder, boolean hasMediaSpoilers) {
-        sendMessage(null, caption, null, photo, null, null, null, null, null, null, peer, path, replyToMsg, replyToTopMsg, null, true, null, entities, replyMarkup, params, notify, scheduleDate, ttl, parentObject, null, updateStickersOrder, hasMediaSpoilers);
-    }
-
-    public void sendMessage(TLRPC.TL_photo photo, String path, long peer, MessageObject replyToMsg, MessageObject replyToTopMsg, String caption, ArrayList<TLRPC.MessageEntity> entities, TLRPC.ReplyMarkup replyMarkup, HashMap<String, String> params, boolean notify, int scheduleDate, int ttl, Object parentObject, boolean updateStickersOrder) {
-        sendMessage(null, caption, null, photo, null, null, null, null, null, null, peer, path, replyToMsg, replyToTopMsg, null, true, null, entities, replyMarkup, params, notify, scheduleDate, ttl, parentObject, null, updateStickersOrder);
-    }
-
-    private void sendMessage(String message, String caption, TLRPC.MessageMedia location, TLRPC.TL_photo photo, VideoEditedInfo videoEditedInfo, TLRPC.User user, TLRPC.TL_document document, TLRPC.TL_game game, TLRPC.TL_messageMediaPoll poll, TLRPC.TL_messageMediaInvoice invoice, long peer, String path, MessageObject replyToMsg, MessageObject replyToTopMsg, TLRPC.WebPage webPage, boolean searchLinks, MessageObject retryMessageObject, ArrayList<TLRPC.MessageEntity> entities, TLRPC.ReplyMarkup replyMarkup, HashMap<String, String> params, boolean notify, int scheduleDate, int ttl, Object parentObject, MessageObject.SendAnimationData sendAnimationData, boolean updateStickersOrder) {
-        sendMessage(message, caption, location, photo, videoEditedInfo, user, document, game, poll, invoice, peer, path, replyToMsg, replyToTopMsg, webPage, searchLinks, retryMessageObject, entities, replyMarkup, params, notify, scheduleDate, ttl, parentObject, sendAnimationData, updateStickersOrder, false);
-    }
-
-    private void sendMessage(String message, String caption, TLRPC.MessageMedia location, TLRPC.TL_photo photo, VideoEditedInfo videoEditedInfo, TLRPC.User user, TLRPC.TL_document document, TLRPC.TL_game game, TLRPC.TL_messageMediaPoll poll, TLRPC.TL_messageMediaInvoice invoice, long peer, String path, MessageObject replyToMsg, MessageObject replyToTopMsg, TLRPC.WebPage webPage, boolean searchLinks, MessageObject retryMessageObject, ArrayList<TLRPC.MessageEntity> entities, TLRPC.ReplyMarkup replyMarkup, HashMap<String, String> params, boolean notify, int scheduleDate, int ttl, Object parentObject, MessageObject.SendAnimationData sendAnimationData, boolean updateStickersOrder, boolean hasMediaSpoilers) {
         if (user != null && user.phone == null) {
             return;
         }
@@ -3341,6 +3465,10 @@ public class SendMessagesHelper extends BaseController implements NotificationCe
         }
         if (message == null && caption == null) {
             caption = "";
+        }
+
+        if (replyQuote != null && replyQuote.message != null && replyToMsg != null) {
+            replyToMsg = replyQuote.message;
         }
 
         String originalPath = null;
@@ -3364,7 +3492,7 @@ public class SendMessagesHelper extends BaseController implements NotificationCe
             encryptedChat = getMessagesController().getEncryptedChat(DialogObject.getEncryptedChatId(peer));
             if (encryptedChat == null) {
                 if (retryMessageObject != null) {
-                    getMessagesStorage().markMessageAsSendError(retryMessageObject.messageOwner, retryMessageObject.scheduled);
+                    getMessagesStorage().markMessageAsSendError(retryMessageObject.messageOwner, retryMessageObject.scheduled ? 1 : 0);
                     retryMessageObject.messageOwner.send_state = MessageObject.MESSAGE_SEND_STATE_SEND_ERROR;
                     getNotificationCenter().postNotificationName(NotificationCenter.messageSendError, retryMessageObject.getId());
                     processSentMessage(retryMessageObject.getId());
@@ -3391,7 +3519,7 @@ public class SendMessagesHelper extends BaseController implements NotificationCe
                     type = 4;
                 } else {
                     if (retryMessageObject.isDice()) {
-                        type = 11;
+                        type = MEDIA_TYPE_DICE;
                         message = retryMessageObject.getDiceEmoji();
                         caption = "";
                     } else if (retryMessageObject.type == MessageObject.TYPE_TEXT || retryMessageObject.isAnimatedEmoji()) {
@@ -3487,10 +3615,12 @@ public class SendMessagesHelper extends BaseController implements NotificationCe
                         mediaDice.emoticon = message;
                         mediaDice.value = -1;
                         newMsg.media = mediaDice;
-                        type = 11;
+                        type = MEDIA_TYPE_DICE;
                         caption = "";
                     } else {
-                        if (webPage == null) {
+                        if (mediaWebPage != null) {
+                            newMsg.media = mediaWebPage;
+                        } else if (webPage == null) {
                             newMsg.media = new TLRPC.TL_messageMediaEmpty();
                         } else {
                             newMsg.media = new TLRPC.TL_messageMediaWebPage();
@@ -3618,7 +3748,7 @@ public class SendMessagesHelper extends BaseController implements NotificationCe
                     newMsg.media.document = document;
                     if (params != null && params.containsKey("query_id")) {
                         type = 9;
-                    } else if (!MessageObject.isVideoSticker(document) && (MessageObject.isVideoDocument(document) || MessageObject.isRoundVideoDocument(document) || videoEditedInfo != null)) {
+                    } else if ((!MessageObject.isVideoSticker(document) || videoEditedInfo != null) && (MessageObject.isVideoDocument(document) || MessageObject.isRoundVideoDocument(document) || videoEditedInfo != null)) {
                         type = 3;
                     } else if (MessageObject.isVoiceDocument(document)) {
                         type = 8;
@@ -3672,6 +3802,19 @@ public class SendMessagesHelper extends BaseController implements NotificationCe
                             }
                         }
                     }
+                } else if (sendingStory != null) {
+                    if (encryptedChat != null) {
+                        newMsg = new TLRPC.TL_message_secret();
+                    } else {
+                        newMsg = new TLRPC.TL_message();
+                    }
+                    TLRPC.TL_messageMediaStory mediaStory = new MessageMediaStoryFull();
+                    mediaStory.id = sendingStory.id;
+                    mediaStory.user_id = sendingStory.dialogId;
+                    mediaStory.peer = getMessagesController().getPeer(sendingStory.dialogId);
+                    mediaStory.storyItem = sendingStory;
+                    newMsg.media = mediaStory;
+                    type = MEDIA_TYPE_STORY;
                 }
                 if (entities != null && !entities.isEmpty()) {
                     newMsg.entities = entities;
@@ -3707,6 +3850,21 @@ public class SendMessagesHelper extends BaseController implements NotificationCe
             if (newMsg.random_id == 0) {
                 newMsg.random_id = getNextRandomId();
             }
+            if (quick_reply_shortcut != null || quick_reply_shortcut_id != 0) {
+                if (quick_reply_shortcut_id != 0) {
+                    TLRPC.TL_inputQuickReplyShortcutId shortcut = new TLRPC.TL_inputQuickReplyShortcutId();
+                    shortcut.shortcut_id = quick_reply_shortcut_id;
+                    newMsg.quick_reply_shortcut = shortcut;
+                } else {
+                    TLRPC.TL_inputQuickReplyShortcut shortcut = new TLRPC.TL_inputQuickReplyShortcut();
+                    shortcut.shortcut = quick_reply_shortcut;
+                    newMsg.quick_reply_shortcut = shortcut;
+                }
+                newMsg.quick_reply_shortcut_id = quick_reply_shortcut_id;
+                if (newMsg.quick_reply_shortcut_id != 0) {
+                    newMsg.flags |= 1073741824;
+                }
+            }
             if (params != null && params.containsKey("bot")) {
                 if (encryptedChat != null) {
                     newMsg.via_bot_name = params.get("bot_name");
@@ -3720,7 +3878,13 @@ public class SendMessagesHelper extends BaseController implements NotificationCe
             }
             newMsg.params = params;
             if (retryMessageObject == null || !retryMessageObject.resendAsIs) {
-                newMsg.date = scheduleDate != 0 ? scheduleDate : getConnectionsManager().getCurrentTime();
+                if (quick_reply_shortcut != null) {
+                    newMsg.date = 0;
+                } else if (scheduleDate != 0) {
+                    newMsg.date = scheduleDate;
+                } else {
+                    newMsg.date = getConnectionsManager().getCurrentTime();
+                }
                 if (sendToPeer instanceof TLRPC.TL_inputPeerChannel) {
                     if (scheduleDate == 0 && isChannel) {
                         newMsg.views = 1;
@@ -3744,7 +3908,14 @@ public class SendMessagesHelper extends BaseController implements NotificationCe
             }
             newMsg.flags |= TLRPC.MESSAGE_FLAG_HAS_MEDIA;
             newMsg.dialog_id = peer;
-            if (replyToMsg != null && (replyToTopMsg == null || replyToMsg != replyToTopMsg || replyToTopMsg.getId() != 1)) {
+            newMsg.invert_media = invert_media;
+            if (replyToStoryItem != null) {
+                newMsg.reply_to = new TLRPC.TL_messageReplyStoryHeader();
+                newMsg.reply_to.story_id = replyToStoryItem.id;
+                newMsg.reply_to.peer = getMessagesController().getPeer(replyToStoryItem.dialogId);
+                newMsg.replyStory = replyToStoryItem;
+                newMsg.flags |= TLRPC.MESSAGE_FLAG_REPLY;
+            } else if (replyToMsg != null && (replyToTopMsg == null || replyToMsg != replyToTopMsg || replyToTopMsg.getId() != 1)) {
                 newMsg.reply_to = new TLRPC.TL_messageReplyHeader();
                 if (encryptedChat != null && replyToMsg.messageOwner.random_id != 0) {
                     newMsg.reply_to.reply_to_random_id = replyToMsg.messageOwner.random_id;
@@ -3752,6 +3923,7 @@ public class SendMessagesHelper extends BaseController implements NotificationCe
                 } else {
                     newMsg.flags |= TLRPC.MESSAGE_FLAG_REPLY;
                 }
+                newMsg.reply_to.flags |= 16;
                 newMsg.reply_to.reply_to_msg_id = replyToMsg.getId();
                 if (replyToTopMsg != null && replyToTopMsg != replyToMsg && replyToTopMsg.getId() != 1) {
                     newMsg.reply_to.reply_to_top_id = replyToTopMsg.getId();
@@ -3764,6 +3936,20 @@ public class SendMessagesHelper extends BaseController implements NotificationCe
                     if (replyToMsg.isTopicMainMessage) {
                         newMsg.reply_to.forum_topic = true;
                         newMsg.reply_to.flags |= 8;
+                    }
+                }
+                if (replyQuote != null) {
+                    newMsg.reply_to.quote_text = replyQuote.getText();
+                    if (!TextUtils.isEmpty(newMsg.reply_to.quote_text)) {
+                        newMsg.reply_to.quote = true;
+                        newMsg.reply_to.flags |= 64;
+                        newMsg.reply_to.flags |= 1024;
+                        newMsg.reply_to.quote_offset = replyQuote.start;
+                        newMsg.reply_to.quote_entities = replyQuote.getEntities();
+                        if (newMsg.reply_to.quote_entities != null && !newMsg.reply_to.quote_entities.isEmpty()) {
+                            newMsg.reply_to.quote_entities = new ArrayList<>(newMsg.reply_to.quote_entities);
+                            newMsg.reply_to.flags |= 128;
+                        }
                     }
                 }
             }
@@ -3817,7 +4003,7 @@ public class SendMessagesHelper extends BaseController implements NotificationCe
                         for (int a = 0; a < newMsg.media.document.attributes.size(); a++) {
                             TLRPC.DocumentAttribute attribute = newMsg.media.document.attributes.get(a);
                             if (attribute instanceof TLRPC.TL_documentAttributeAudio) {
-                                duration = attribute.duration;
+                                duration = (int) attribute.duration;
                                 break;
                             }
                         }
@@ -3827,11 +4013,65 @@ public class SendMessagesHelper extends BaseController implements NotificationCe
                         for (int a = 0; a < newMsg.media.document.attributes.size(); a++) {
                             TLRPC.DocumentAttribute attribute = newMsg.media.document.attributes.get(a);
                             if (attribute instanceof TLRPC.TL_documentAttributeVideo) {
-                                duration = attribute.duration;
+                                duration = (int) attribute.duration;
                                 break;
                             }
                         }
                         newMsg.ttl = Math.max(newMsg.ttl, duration + 1);
+                    }
+                }
+            }
+            boolean destroyReply = false;
+            if (replyToMsg != null && replyToStoryItem == null && newMsg.reply_to != null && !DialogObject.isEncryptedDialog(replyToMsg.getDialogId())) {
+                boolean convertToQuote = false;
+                TLRPC.Peer peer2 = getMessagesController().getPeer(replyToMsg.getDialogId() > 0 ? replyToMsg.getSenderId() : replyToMsg.getDialogId());
+                boolean anotherChat = peer2 != null && !MessageObject.peersEqual(getMessagesController().getPeer(replyToMsg.getDialogId()), newMsg.peer_id);
+                if (anotherChat && replyToMsg.isForwarded() && !replyToMsg.isImportedForward() && replyToMsg.messageOwner.fwd_from.saved_from_peer == null) {
+                    if (replyToMsg.messageOwner.fwd_from.from_id != null && (replyToMsg.messageOwner.fwd_from.flags & 4) != 0) {
+                        peer2 = replyToMsg.messageOwner.fwd_from.from_id;
+                        newMsg.reply_to.reply_to_msg_id = replyToMsg.messageOwner.fwd_from.channel_post;
+                        destroyReply = true;
+                        anotherChat = true;
+                    }
+                }
+                boolean anotherTopic = false;
+                if (replyToMsg != null) {
+                    boolean isForum = false;
+                    if (!isForum) {
+                        TLRPC.Chat chat = getMessagesController().getChat(-DialogObject.getPeerDialogId(newMsg.peer_id));
+                        if (ChatObject.isForum(chat)) {
+                            isForum = true;
+                        }
+                    }
+                    if (isForum) {
+                        anotherTopic = replyToTopMsg.getId() != replyToMsg.getId() && MessageObject.getTopicId(currentAccount, replyToMsg.messageOwner, true) != replyToTopMsg.getId();
+                    }
+                }
+                if (anotherChat || anotherTopic) {
+                    newMsg.reply_to.flags |= 1;
+                    newMsg.reply_to.reply_to_peer_id = peer2;
+                    convertToQuote = true;
+                }
+                if (convertToQuote) {
+                    if (replyQuote == null) {
+                        newMsg.reply_to.quote = false;
+                        replyQuote = ChatActivity.ReplyQuote.from(replyToMsg);
+                    }
+                    if (replyQuote != null) {
+                        if (replyToMsg.messageOwner != null && replyToMsg.messageOwner.media != null) {
+                            newMsg.reply_to.flags |= 256;
+                            newMsg.reply_to.reply_media = replyToMsg.messageOwner.media;
+                        }
+                        if (replyQuote.getText() != null) {
+                            newMsg.reply_to.flags |= 64;
+                            newMsg.reply_to.quote_text = replyQuote.getText();
+                            newMsg.reply_to.flags |= 1024;
+                            newMsg.reply_to.quote_offset = replyQuote.start;
+                        }
+                        if (replyQuote.getEntities() != null) {
+                            newMsg.reply_to.flags |= 128;
+                            newMsg.reply_to.quote_entities = replyQuote.getEntities();
+                        }
                     }
                 }
             }
@@ -3857,7 +4097,7 @@ public class SendMessagesHelper extends BaseController implements NotificationCe
             }
 
             MessageObject reply = replyToMsg;
-            if (replyToTopMsg != null && replyToTopMsg == reply && replyToTopMsg.getId() == 1) {
+            if (replyToTopMsg != null && replyToTopMsg == reply && replyToTopMsg.getId() == 1 || destroyReply) {
                 reply = null;
             }
             newMsgObj = new MessageObject(currentAccount, newMsg, reply, true, true);
@@ -3869,6 +4109,8 @@ public class SendMessagesHelper extends BaseController implements NotificationCe
             }
             if (newMsgObj.videoEditedInfo != null && videoEditedInfo == null) {
                 videoEditedInfo = newMsgObj.videoEditedInfo;
+            } else if (videoEditedInfo != null && videoEditedInfo.notReadyYet) {
+                newMsgObj.videoEditedInfo.notReadyYet = videoEditedInfo.notReadyYet;
             }
 
             if (groupId == 0) {
@@ -3876,8 +4118,18 @@ public class SendMessagesHelper extends BaseController implements NotificationCe
                 objArr.add(newMsgObj);
                 ArrayList<TLRPC.Message> arr = new ArrayList<>();
                 arr.add(newMsg);
-                MessagesStorage.getInstance(currentAccount).putMessages(arr, false, true, false, 0, scheduleDate != 0, 0);
-                MessagesController.getInstance(currentAccount).updateInterfaceWithMessages(peer, objArr, scheduleDate != 0);
+                long threadMessageId = 0;
+                final int mode;
+                if (scheduleDate != 0) {
+                    mode = ChatActivity.MODE_SCHEDULED;
+                } else if (quick_reply_shortcut != null) {
+                    mode = ChatActivity.MODE_QUICK_REPLIES;
+                    threadMessageId = newMsg.quick_reply_shortcut_id;
+                } else {
+                    mode = 0;
+                }
+                MessagesStorage.getInstance(currentAccount).putMessages(arr, false, true, false, 0, mode, threadMessageId);
+                MessagesController.getInstance(currentAccount).updateInterfaceWithMessages(peer, objArr, mode);
                 if (scheduleDate == 0) {
                     NotificationCenter.getInstance(currentAccount).postNotificationName(NotificationCenter.dialogsNeedReload);
                 }
@@ -3912,40 +4164,89 @@ public class SendMessagesHelper extends BaseController implements NotificationCe
 
             if (type == 0 || type == 9 && message != null && encryptedChat != null) {
                 if (encryptedChat == null) {
-                    TLRPC.TL_messages_sendMessage reqSend = new TLRPC.TL_messages_sendMessage();
-                    reqSend.message = message;
-                    reqSend.clear_draft = retryMessageObject == null;
-                    reqSend.silent = newMsg.silent;
-                    reqSend.peer = sendToPeer;
-                    reqSend.random_id = newMsg.random_id;
-                    if (replyToTopMsg != null) {
-                        reqSend.top_msg_id = replyToTopMsg.getId();
-                        reqSend.flags |= 512;
-                    }
-                    if (updateStickersOrder && SharedConfig.updateStickersOrderOnSend) {
-                        reqSend.update_stickersets_order = true;
-                    }
-                    if (newMsg.from_id != null) {
-                        reqSend.send_as = getMessagesController().getInputPeer(newMsg.from_id);
-                    }
-                    if (newMsg.reply_to != null && newMsg.reply_to.reply_to_msg_id != 0) {
-                        reqSend.flags |= 1;
-                        reqSend.reply_to_msg_id = newMsg.reply_to.reply_to_msg_id;
-                    }
-                    if (!searchLinks) {
-                        reqSend.no_webpage = true;
-                    }
-                    if (entities != null && !entities.isEmpty()) {
-                        reqSend.entities = entities;
-                        reqSend.flags |= 8;
-                    }
-                    if (scheduleDate != 0) {
-                        reqSend.schedule_date = scheduleDate;
-                        reqSend.flags |= 1024;
-                    }
-                    performSendMessageRequest(reqSend, newMsgObj, null, null, parentObject, params, scheduleDate != 0);
-                    if (retryMessageObject == null) {
-                        getMediaDataController().cleanDraft(peer, replyToTopMsg != null ? replyToTopMsg.getId() : 0, false);
+                    if (mediaWebPage != null) {
+                        TLRPC.TL_messages_sendMedia reqSend = new TLRPC.TL_messages_sendMedia();
+                        reqSend.message = message;
+                        reqSend.clear_draft = retryMessageObject == null;
+                        reqSend.silent = newMsg.silent;
+                        reqSend.peer = sendToPeer;
+                        reqSend.random_id = newMsg.random_id;
+                        TLRPC.TL_inputMediaWebPage inputWebPage = new TLRPC.TL_inputMediaWebPage();
+                        inputWebPage.url = mediaWebPage.webpage.url;
+                        inputWebPage.force_large_media = mediaWebPage.force_large_media;
+                        inputWebPage.force_small_media = mediaWebPage.force_small_media;
+                        inputWebPage.optional = true;
+                        reqSend.media = inputWebPage;
+                        if (replyToStoryItem != null) {
+                            reqSend.reply_to = createReplyInput(replyToStoryItem);
+                            reqSend.flags |= 1;
+                        } else if (newMsg.reply_to instanceof TLRPC.TL_messageReplyHeader) {
+                            reqSend.reply_to = createReplyInput((TLRPC.TL_messageReplyHeader) newMsg.reply_to);
+                            reqSend.flags |= 1;
+                        }
+                        if (updateStickersOrder && SharedConfig.updateStickersOrderOnSend) {
+                            reqSend.update_stickersets_order = true;
+                        }
+                        if (newMsg.from_id != null) {
+                            reqSend.send_as = getMessagesController().getInputPeer(newMsg.from_id);
+                        }
+                        if (entities != null && !entities.isEmpty()) {
+                            reqSend.entities = entities;
+                            reqSend.flags |= 8;
+                        }
+                        if (scheduleDate != 0) {
+                            reqSend.schedule_date = scheduleDate;
+                            reqSend.flags |= 1024;
+                        }
+                        if (newMsg.quick_reply_shortcut != null) {
+                            reqSend.flags |= 131072;
+                            reqSend.quick_reply_shortcut = newMsg.quick_reply_shortcut;
+                        }
+                        reqSend.invert_media = newMsg.invert_media;
+                        performSendMessageRequest(reqSend, newMsgObj, null, null, parentObject, params, scheduleDate != 0);
+                        if (retryMessageObject == null) {
+                            getMediaDataController().cleanDraft(peer, replyToTopMsg != null ? replyToTopMsg.getId() : 0, false);
+                        }
+                    } else {
+                        TLRPC.TL_messages_sendMessage reqSend = new TLRPC.TL_messages_sendMessage();
+                        reqSend.message = message;
+                        reqSend.clear_draft = retryMessageObject == null;
+                        reqSend.silent = newMsg.silent;
+                        reqSend.peer = sendToPeer;
+                        reqSend.random_id = newMsg.random_id;
+                        if (replyToStoryItem != null) {
+                            reqSend.reply_to = createReplyInput(replyToStoryItem);
+                            reqSend.flags |= 1;
+                        } else if (newMsg.reply_to instanceof TLRPC.TL_messageReplyHeader) {
+                            reqSend.reply_to = createReplyInput((TLRPC.TL_messageReplyHeader) newMsg.reply_to);
+                            reqSend.flags |= 1;
+                        }
+                        if (newMsg.quick_reply_shortcut != null) {
+                            reqSend.flags |= 131072;
+                            reqSend.quick_reply_shortcut = newMsg.quick_reply_shortcut;
+                        }
+                        if (updateStickersOrder && SharedConfig.updateStickersOrderOnSend) {
+                            reqSend.update_stickersets_order = true;
+                        }
+                        if (newMsg.from_id != null) {
+                            reqSend.send_as = getMessagesController().getInputPeer(newMsg.from_id);
+                        }
+                        if (!searchLinks) {
+                            reqSend.no_webpage = true;
+                        }
+                        if (entities != null && !entities.isEmpty()) {
+                            reqSend.entities = entities;
+                            reqSend.flags |= 8;
+                        }
+                        if (scheduleDate != 0) {
+                            reqSend.schedule_date = scheduleDate;
+                            reqSend.flags |= 1024;
+                        }
+                        reqSend.invert_media = newMsg.invert_media;
+                        performSendMessageRequest(reqSend, newMsgObj, null, null, parentObject, params, scheduleDate != 0);
+                        if (retryMessageObject == null) {
+                            getMediaDataController().cleanDraft(peer, replyToTopMsg != null ? replyToTopMsg.getId() : 0, false);
+                        }
                     }
                 } else {
                     TLRPC.TL_decryptedMessage reqSend;
@@ -3978,7 +4279,7 @@ public class SendMessagesHelper extends BaseController implements NotificationCe
                         getMediaDataController().cleanDraft(peer, replyToTopMsg != null ? replyToTopMsg.getId() : 0, false);
                     }
                 }
-            } else if (type >= 1 && type <= 3 || type >= 5 && type <= 8 || type == 9 && encryptedChat != null || type == 10 || type == 11) {
+            } else if (type >= 1 && type <= 3 || type >= 5 && type <= 8 || type == 9 && encryptedChat != null || type == 10 || type == MEDIA_TYPE_DICE || type == MEDIA_TYPE_STORY) {
                 if (encryptedChat == null) {
                     TLRPC.InputMedia inputMedia = null;
                     if (type == 1) {
@@ -4242,10 +4543,15 @@ public class SendMessagesHelper extends BaseController implements NotificationCe
                             inputMediaPoll.flags |= 2;
                         }
                         inputMedia = inputMediaPoll;
-                    } else if (type == 11) {
+                    } else if (type == MEDIA_TYPE_DICE) {
                         TLRPC.TL_inputMediaDice inputMediaDice = new TLRPC.TL_inputMediaDice();
                         inputMediaDice.emoticon = message;
                         inputMedia = inputMediaDice;
+                    } else if (type == MEDIA_TYPE_STORY) {
+                        TLRPC.TL_inputMediaStory inputMediaStory = new TLRPC.TL_inputMediaStory();
+                        inputMediaStory.id = sendingStory.id;
+                        inputMediaStory.peer = MessagesController.getInstance(currentAccount).getInputPeer(sendingStory.dialogId);
+                        inputMedia = inputMediaStory;
                     }
 
                     TLObject reqSend;
@@ -4258,17 +4564,21 @@ public class SendMessagesHelper extends BaseController implements NotificationCe
                             request = new TLRPC.TL_messages_sendMultiMedia();
                             request.peer = sendToPeer;
                             request.silent = newMsg.silent;
-                            if (replyToTopMsg != null) {
-                                request.top_msg_id = replyToTopMsg.getId();
-                                request.flags |= 512;
-                            }
-                            if (newMsg.reply_to != null && newMsg.reply_to.reply_to_msg_id != 0) {
+
+                            if (newMsg.replyStory != null) {
                                 request.flags |= 1;
-                                request.reply_to_msg_id = newMsg.reply_to.reply_to_msg_id;
+                                request.reply_to = createReplyInput(replyToStoryItem);
+                            } else if (newMsg.reply_to instanceof TLRPC.TL_messageReplyHeader) {
+                                request.flags |= 1;
+                                request.reply_to = createReplyInput((TLRPC.TL_messageReplyHeader) newMsg.reply_to);
                             }
                             if (scheduleDate != 0) {
                                 request.schedule_date = scheduleDate;
                                 request.flags |= 1024;
+                            }
+                            if (newMsg.quick_reply_shortcut != null) {
+                                request.quick_reply_shortcut = newMsg.quick_reply_shortcut;
+                                request.flags |= 131072;
                             }
                             delayedMessage.sendRequest = request;
                         }
@@ -4294,13 +4604,16 @@ public class SendMessagesHelper extends BaseController implements NotificationCe
                         TLRPC.TL_messages_sendMedia request = new TLRPC.TL_messages_sendMedia();
                         request.peer = sendToPeer;
                         request.silent = newMsg.silent;
+                        int replyToTopMsgInt = 0;
                         if (replyToTopMsg != null) {
-                            request.top_msg_id = replyToTopMsg.getId();
-                            request.flags |= 512;
+                            replyToTopMsgInt = replyToTopMsg.getId();
                         }
-                        if (newMsg.reply_to != null && newMsg.reply_to.reply_to_msg_id != 0) {
+                        if (replyToStoryItem != null) {
+                            request.reply_to = createReplyInput(replyToStoryItem);
                             request.flags |= 1;
-                            request.reply_to_msg_id = newMsg.reply_to.reply_to_msg_id;
+                        } else if (newMsg.reply_to instanceof TLRPC.TL_messageReplyHeader) {
+                            request.flags |= 1;
+                            request.reply_to = createReplyInput((TLRPC.TL_messageReplyHeader) newMsg.reply_to);
                         }
                         request.random_id = newMsg.random_id;
                         if (newMsg.from_id != null) {
@@ -4318,6 +4631,10 @@ public class SendMessagesHelper extends BaseController implements NotificationCe
                         }
                         if (updateStickersOrder && SharedConfig.updateStickersOrderOnSend) {
                             request.update_stickersets_order = true;
+                        }
+                        if (newMsg.quick_reply_shortcut != null) {
+                            request.flags |= 131072;
+                            request.quick_reply_shortcut = newMsg.quick_reply_shortcut;
                         }
 
                         if (delayedMessage != null) {
@@ -4355,7 +4672,7 @@ public class SendMessagesHelper extends BaseController implements NotificationCe
                         } else {
                             performSendMessageRequest(reqSend, newMsgObj, originalPath, delayedMessage, parentObject, params, scheduleDate != 0);
                         }
-                    } else if (type == 10 || type == 11) {
+                    } else if (type == 10 || type == MEDIA_TYPE_DICE || type == MEDIA_TYPE_STORY) {
                         performSendMessageRequest(reqSend, newMsgObj, originalPath, delayedMessage, parentObject, params, scheduleDate != 0);
                     }
                 } else {
@@ -4475,7 +4792,7 @@ public class SendMessagesHelper extends BaseController implements NotificationCe
                             if (attribute instanceof TLRPC.TL_documentAttributeVideo) {
                                 reqSend.media.w = attribute.w;
                                 reqSend.media.h = attribute.h;
-                                reqSend.media.duration = attribute.duration;
+                                reqSend.media.duration = (int) attribute.duration;
                                 break;
                             }
                         }
@@ -4694,17 +5011,21 @@ public class SendMessagesHelper extends BaseController implements NotificationCe
                 TLRPC.TL_messages_sendInlineBotResult reqSend = new TLRPC.TL_messages_sendInlineBotResult();
                 reqSend.peer = sendToPeer;
                 reqSend.random_id = newMsg.random_id;
-                if (replyToTopMsg != null) {
-                    reqSend.top_msg_id = replyToTopMsg.getId();
-                    reqSend.flags |= 512;
+                if (newMsg.quick_reply_shortcut != null) {
+                    reqSend.flags |= 131072;
+                    reqSend.quick_reply_shortcut = newMsg.quick_reply_shortcut;
                 }
+
                 if (newMsg.from_id != null) {
                     reqSend.send_as = getMessagesController().getInputPeer(newMsg.from_id);
                 }
                 reqSend.hide_via = !params.containsKey("bot");
-                if (newMsg.reply_to != null && newMsg.reply_to.reply_to_msg_id != 0) {
+                if (replyToStoryItem != null) {
+                    reqSend.reply_to = createReplyInput(replyToStoryItem);
                     reqSend.flags |= 1;
-                    reqSend.reply_to_msg_id = newMsg.reply_to.reply_to_msg_id;
+                } else if (newMsg.reply_to instanceof TLRPC.TL_messageReplyHeader) {
+                    reqSend.flags |= 1;
+                    reqSend.reply_to = createReplyInput((TLRPC.TL_messageReplyHeader) newMsg.reply_to);
                 }
                 reqSend.silent = newMsg.silent;
                 if (scheduleDate != 0) {
@@ -4721,7 +5042,7 @@ public class SendMessagesHelper extends BaseController implements NotificationCe
             }
         } catch (Exception e) {
             FileLog.e(e);
-            getMessagesStorage().markMessageAsSendError(newMsg, scheduleDate != 0);
+            getMessagesStorage().markMessageAsSendError(newMsg, scheduleDate != 0 ? 1 : 0);
             if (newMsgObj != null) {
                 newMsgObj.messageOwner.send_state = MessageObject.MESSAGE_SEND_STATE_SEND_ERROR;
             }
@@ -4800,10 +5121,12 @@ public class SendMessagesHelper extends BaseController implements NotificationCe
                 String location = message.obj.messageOwner.attachPath;
                 TLRPC.Document document = message.obj.getDocument();
                 if (location == null) {
-                    location = FileLoader.getDirectory(FileLoader.MEDIA_DIR_CACHE) + "/" + document.id + ".mp4";
+                    location = FileLoader.getDirectory(FileLoader.MEDIA_DIR_CACHE) + "/" + document.id + "." + (message.videoEditedInfo.isSticker ? "webm" : "mp4");
                 }
                 putToDelayedMessages(location, message);
-                MediaController.getInstance().scheduleVideoConvert(message.obj);
+                if (!message.videoEditedInfo.alreadyScheduledConverting) {
+                    MediaController.getInstance().scheduleVideoConvert(message.obj);
+                }
                 putToUploadingMessages(message.obj);
             } else {
                 if (message.videoEditedInfo != null) {
@@ -4840,10 +5163,12 @@ public class SendMessagesHelper extends BaseController implements NotificationCe
                             location = FileLoader.getDirectory(FileLoader.MEDIA_DIR_CACHE) + "/" + document.id + ".mp4";
                         }
                         putToDelayedMessages(location, message);
-                        if (message.obj.videoEditedInfo != null && message.obj.videoEditedInfo.needConvert()) {
-                            getFileLoader().uploadFile(location, false, false, document.size, ConnectionsManager.FileTypeVideo, false);
-                        } else {
-                            getFileLoader().uploadFile(location, false, false, ConnectionsManager.FileTypeVideo);
+                        if (message.obj.videoEditedInfo == null || !message.obj.videoEditedInfo.notReadyYet) {
+                            if (message.obj.videoEditedInfo != null && message.obj.videoEditedInfo.needConvert()) {
+                                getFileLoader().uploadFile(location, false, false, document.size, ConnectionsManager.FileTypeVideo, false);
+                            } else {
+                                getFileLoader().uploadFile(location, false, false, ConnectionsManager.FileTypeVideo);
+                            }
                         }
                         putToUploadingMessages(message.obj);
                     } else {
@@ -4881,10 +5206,12 @@ public class SendMessagesHelper extends BaseController implements NotificationCe
                         }
                     }
                     putToDelayedMessages(location, message);
-                    if (message.obj.videoEditedInfo != null && message.obj.videoEditedInfo.needConvert()) {
-                        getFileLoader().uploadFile(location, true, false, document.size, ConnectionsManager.FileTypeVideo, false);
-                    } else {
-                        getFileLoader().uploadFile(location, true, false, ConnectionsManager.FileTypeVideo);
+                    if (message.obj.videoEditedInfo == null || !message.obj.videoEditedInfo.notReadyYet) {
+                        if (message.obj.videoEditedInfo != null && message.obj.videoEditedInfo.needConvert()) {
+                            getFileLoader().uploadFile(location, true, false, document.size, ConnectionsManager.FileTypeVideo, false);
+                        } else {
+                            getFileLoader().uploadFile(location, true, false, ConnectionsManager.FileTypeVideo);
+                        }
                     }
                     putToUploadingMessages(message.obj);
                 }
@@ -4969,7 +5296,9 @@ public class SendMessagesHelper extends BaseController implements NotificationCe
                         if (message.photoSize != null && message.photoSize.location != null) {
                             message.extraHashMap.put(location + "_t", message.photoSize);
                         }
-                        MediaController.getInstance().scheduleVideoConvert(messageObject);
+                        if (!message.videoEditedInfo.alreadyScheduledConverting) {
+                            MediaController.getInstance().scheduleVideoConvert(messageObject);
+                        }
                         message.obj = messageObject;
                         putToUploadingMessages(messageObject);
                     } else {
@@ -5173,8 +5502,19 @@ public class SendMessagesHelper extends BaseController implements NotificationCe
             return;
         } else if (add) {
             delayedMessages.remove(key);
-            getMessagesStorage().putMessages(message.messages, false, true, false, 0, message.scheduled, 0);
-            getMessagesController().updateInterfaceWithMessages(message.peer, message.messageObjects, message.scheduled);
+            final int mode;
+            if (message.scheduled) {
+                mode = ChatActivity.MODE_SCHEDULED;
+            } else if (
+                message.obj != null && message.obj.isQuickReply() ||
+                message.messageObjects != null && !message.messageObjects.isEmpty() && message.messageObjects.get(0).isQuickReply()
+            ) {
+                mode = ChatActivity.MODE_QUICK_REPLIES;
+            } else {
+                mode = ChatActivity.MODE_DEFAULT;
+            }
+            getMessagesStorage().putMessages(message.messages, false, true, false, 0, mode, 0);
+            getMessagesController().updateInterfaceWithMessages(message.peer, message.messageObjects, mode);
             if (!message.scheduled) {
                 getNotificationCenter().postNotificationName(NotificationCenter.dialogsNeedReload);
             }
@@ -5224,10 +5564,6 @@ public class SendMessagesHelper extends BaseController implements NotificationCe
         }
 
         message.sendDelayedRequests();
-    }
-
-    public void stopVideoService(final String path) {
-        getMessagesStorage().getStorageQueue().postRunnable(() -> AndroidUtilities.runOnUIThread(() -> NotificationCenter.getGlobalInstance().postNotificationName(NotificationCenter.stopEncodingService, path, currentAccount)));
     }
 
     protected void putToSendingMessages(TLRPC.Message message, boolean scheduled) {
@@ -5387,7 +5723,7 @@ public class SendMessagesHelper extends BaseController implements NotificationCe
                         if (!hasEmptyFile) {
                             for (int i = 0; i < msgObjs.size(); i++) {
                                 TLRPC.Message newMsgObj = msgObjs.get(i).messageOwner;
-                                getMessagesStorage().markMessageAsSendError(newMsgObj, scheduled);
+                                getMessagesStorage().markMessageAsSendError(newMsgObj, scheduled ? 1 : 0);
                                 newMsgObj.send_state = MessageObject.MESSAGE_SEND_STATE_SEND_ERROR;
                                 getNotificationCenter().postNotificationName(NotificationCenter.messageSendError, newMsgObj.id);
                                 processSentMessage(newMsgObj.id);
@@ -5449,8 +5785,21 @@ public class SendMessagesHelper extends BaseController implements NotificationCe
                             Utilities.stageQueue.postRunnable(() -> getMessagesController().processNewChannelDifferenceParams(newMessage.pts, newMessage.pts_count, newMessage.message.peer_id.channel_id));
                             updatesArr.remove(a);
                             a--;
+                            if (newMessage.message.pinned) {
+                                Utilities.stageQueue.postRunnable(() -> {
+                                    ArrayList<Integer> mids = new ArrayList<>();
+                                    mids.add(newMessage.message.id);
+                                    getMessagesStorage().updatePinnedMessages(-channelId, mids, true, -1, 0, false, null);
+                                });
+                            }
                         } else if (update instanceof TLRPC.TL_updateNewScheduledMessage) {
                             final TLRPC.TL_updateNewScheduledMessage newMessage = (TLRPC.TL_updateNewScheduledMessage) update;
+                            newMessages.put(newMessage.message.id, newMessage.message);
+                            updatesArr.remove(a);
+                            a--;
+                        } else if (update instanceof TLRPC.TL_updateQuickReplyMessage) {
+                            QuickRepliesController.getInstance(currentAccount).processUpdate(update, msgObjs.isEmpty() ? null : msgObjs.get(0).getQuickReplyName(), msgObjs.isEmpty() ? null : msgObjs.get(0).getQuickReplyId());
+                            final TLRPC.TL_updateQuickReplyMessage newMessage = (TLRPC.TL_updateQuickReplyMessage) update;
                             newMessages.put(newMessage.message.id, newMessage.message);
                             updatesArr.remove(a);
                             a--;
@@ -5484,6 +5833,10 @@ public class SendMessagesHelper extends BaseController implements NotificationCe
                                 updateMediaPaths(msgObj, message, message.id, originalPath, false);
                                 existFlags = msgObj.getMediaExistanceFlags();
                                 newMsgObj.id = message.id;
+                                newMsgObj.quick_reply_shortcut_id = message.quick_reply_shortcut_id;
+                                if (newMsgObj.quick_reply_shortcut_id != 0) {
+                                    newMsgObj.flags |= 1073741824;
+                                }
                                 grouped_id = message.grouped_id;
 
                                 if (!scheduled) {
@@ -5508,8 +5861,12 @@ public class SendMessagesHelper extends BaseController implements NotificationCe
                             newMsgObj.send_state = MessageObject.MESSAGE_SEND_STATE_SENT;
                             getNotificationCenter().postNotificationName(NotificationCenter.messageReceivedByServer, oldId, newMsgObj.id, newMsgObj, newMsgObj.dialog_id, grouped_id, existFlags, scheduled);
                             getMessagesStorage().getStorageQueue().postRunnable(() -> {
-                                getMessagesStorage().updateMessageStateAndId(newMsgObj.random_id, MessageObject.getPeerId(newMsgObj.peer_id), oldId, newMsgObj.id, 0, false, scheduled ? 1 : 0);
-                                getMessagesStorage().putMessages(sentMessages, true, false, false, 0, scheduled, 0);
+                                int mode = scheduled ? ChatActivity.MODE_SCHEDULED : 0;
+                                if (newMsgObj.quick_reply_shortcut_id != 0 || newMsgObj.quick_reply_shortcut != null) {
+                                    mode = ChatActivity.MODE_QUICK_REPLIES;
+                                }
+                                getMessagesStorage().updateMessageStateAndId(newMsgObj.random_id, MessageObject.getPeerId(newMsgObj.peer_id), oldId, newMsgObj.id, 0, false, scheduled ? 1 : 0, newMsgObj.quick_reply_shortcut_id);
+                                getMessagesStorage().putMessages(sentMessages, true, false, false, 0, mode, newMsgObj.quick_reply_shortcut_id);
                                 AndroidUtilities.runOnUIThread(() -> {
                                     getMediaDataController().increasePeerRaiting(newMsgObj.dialog_id);
                                     getNotificationCenter().postNotificationName(NotificationCenter.messageReceivedByServer, oldId, newMsgObj.id, newMsgObj, newMsgObj.dialog_id, grouped_id, existFlags, scheduled);
@@ -5527,7 +5884,7 @@ public class SendMessagesHelper extends BaseController implements NotificationCe
                 if (isSentError) {
                     for (int i = 0; i < msgObjs.size(); i++) {
                         TLRPC.Message newMsgObj = msgObjs.get(i).messageOwner;
-                        getMessagesStorage().markMessageAsSendError(newMsgObj, scheduled);
+                        getMessagesStorage().markMessageAsSendError(newMsgObj, scheduled ? 1 : 0);
                         newMsgObj.send_state = MessageObject.MESSAGE_SEND_STATE_SEND_ERROR;
                         getNotificationCenter().postNotificationName(NotificationCenter.messageSendError, newMsgObj.id);
                         processSentMessage(newMsgObj.id);
@@ -5635,6 +5992,11 @@ public class SendMessagesHelper extends BaseController implements NotificationCe
                                 final TLRPC.TL_updateNewScheduledMessage newMessage = (TLRPC.TL_updateNewScheduledMessage) update;
                                 message = newMessage.message;
                                 break;
+                            } else if (update instanceof TLRPC.TL_updateQuickReplyMessage) {
+                                QuickRepliesController.getInstance(currentAccount).processUpdate(update, MessageObject.getQuickReplyName(newMsgObj), MessageObject.getQuickReplyId(newMsgObj));
+                                final TLRPC.TL_updateQuickReplyMessage newMessage = (TLRPC.TL_updateQuickReplyMessage) update;
+                                message = newMessage.message;
+                                break;
                             }
                         }
                         if (message != null) {
@@ -5648,14 +6010,9 @@ public class SendMessagesHelper extends BaseController implements NotificationCe
                                 removeFromSendingMessages(newMsgObj.id, scheduled);
                             });
                         });
-                        if (MessageObject.isVideoMessage(newMsgObj) || MessageObject.isRoundVideoMessage(newMsgObj) || MessageObject.isNewGifMessage(newMsgObj)) {
-                            stopVideoService(attachPath);
-                        }
+
                     } else {
                         AlertsCreator.processError(currentAccount, error, null, req);
-                        if (MessageObject.isVideoMessage(newMsgObj) || MessageObject.isRoundVideoMessage(newMsgObj) || MessageObject.isNewGifMessage(newMsgObj)) {
-                            stopVideoService(newMsgObj.attachPath);
-                        }
                         removeFromSendingMessages(newMsgObj.id, scheduled);
                         revertEditingMessageObject(msgObj);
                     }
@@ -5747,9 +6104,23 @@ public class SendMessagesHelper extends BaseController implements NotificationCe
                                     sentMessages.add(message = newMessage.message);
                                     Utilities.stageQueue.postRunnable(() -> getMessagesController().processNewChannelDifferenceParams(newMessage.pts, newMessage.pts_count, newMessage.message.peer_id.channel_id));
                                     updatesArr.remove(a);
+                                    a--;
+                                    if (newMessage.message.pinned) {
+                                        Utilities.stageQueue.postRunnable(() -> {
+                                            ArrayList<Integer> mids = new ArrayList<>();
+                                            mids.add(newMessage.message.id);
+                                            getMessagesStorage().updatePinnedMessages(-channelId, mids, true, -1, 0, false, null);
+                                        });
+                                    }
                                     break;
                                 } else if (update instanceof TLRPC.TL_updateNewScheduledMessage) {
                                     final TLRPC.TL_updateNewScheduledMessage newMessage = (TLRPC.TL_updateNewScheduledMessage) update;
+                                    sentMessages.add(message = newMessage.message);
+                                    updatesArr.remove(a);
+                                    break;
+                                } else if (update instanceof TLRPC.TL_updateQuickReplyMessage) {
+                                    QuickRepliesController.getInstance(currentAccount).processUpdate(update, msgObj.getQuickReplyName(), msgObj.getQuickReplyId());
+                                    final TLRPC.TL_updateQuickReplyMessage newMessage = (TLRPC.TL_updateQuickReplyMessage) update;
                                     sentMessages.add(message = newMessage.message);
                                     updatesArr.remove(a);
                                     break;
@@ -5779,6 +6150,10 @@ public class SendMessagesHelper extends BaseController implements NotificationCe
                                     msgObj.messageOwner.flags |= 33554432;
                                 }
                                 msgObj.messageOwner.entities = message.entities;
+                                msgObj.messageOwner.quick_reply_shortcut_id = message.quick_reply_shortcut_id;
+                                if (msgObj.messageOwner.quick_reply_shortcut_id != 0) {
+                                    msgObj.messageOwner.flags |= 1073741824;
+                                }
                                 updateMediaPaths(msgObj, message, message.id, originalPath, false);
                                 existFlags = msgObj.getMediaExistanceFlags();
                                 newMsgObj.id = message.id;
@@ -5808,35 +6183,33 @@ public class SendMessagesHelper extends BaseController implements NotificationCe
                             if (scheduled && !currentSchedule) {
                                 ArrayList<Integer> messageIds = new ArrayList<>();
                                 messageIds.add(oldId);
-                                getMessagesController().deleteMessages(messageIds, null, null, newMsgObj.dialog_id, false, true);
+                                getMessagesController().deleteMessages(messageIds, null, null, newMsgObj.dialog_id, 0, false, ChatActivity.MODE_SCHEDULED);
                                 getMessagesStorage().getStorageQueue().postRunnable(() -> {
-                                    getMessagesStorage().putMessages(sentMessages, true, false, false, 0, false, 0);
+                                    getMessagesStorage().putMessages(sentMessages, true, false, false, 0, false, 0, 0);
                                     AndroidUtilities.runOnUIThread(() -> {
                                         ArrayList<MessageObject> messageObjects = new ArrayList<>();
                                         messageObjects.add(new MessageObject(msgObj.currentAccount, msgObj.messageOwner, true, true));
-                                        getMessagesController().updateInterfaceWithMessages(newMsgObj.dialog_id, messageObjects, false);
+                                        getMessagesController().updateInterfaceWithMessages(newMsgObj.dialog_id, messageObjects, 0);
                                         getMediaDataController().increasePeerRaiting(newMsgObj.dialog_id);
                                         processSentMessage(oldId);
                                         removeFromSendingMessages(oldId, scheduled);
                                     });
-                                    if (MessageObject.isVideoMessage(newMsgObj) || MessageObject.isRoundVideoMessage(newMsgObj) || MessageObject.isNewGifMessage(newMsgObj)) {
-                                        stopVideoService(attachPath);
-                                    }
                                 });
                             } else {
                                 getNotificationCenter().postNotificationName(NotificationCenter.messageReceivedByServer, oldId, newMsgObj.id, newMsgObj, newMsgObj.dialog_id, 0L, existFlags, scheduled);
                                 getMessagesStorage().getStorageQueue().postRunnable(() -> {
-                                    getMessagesStorage().updateMessageStateAndId(newMsgObj.random_id, MessageObject.getPeerId(newMsgObj.peer_id), oldId, newMsgObj.id, 0, false, scheduled ? 1 : 0);
-                                    getMessagesStorage().putMessages(sentMessages, true, false, false, 0, scheduled, 0);
+                                    int mode = scheduled ? ChatActivity.MODE_SCHEDULED : 0;
+                                    if (newMsgObj.quick_reply_shortcut_id != 0 || newMsgObj.quick_reply_shortcut != null) {
+                                        mode = ChatActivity.MODE_QUICK_REPLIES;
+                                    }
+                                    getMessagesStorage().updateMessageStateAndId(newMsgObj.random_id, MessageObject.getPeerId(newMsgObj.peer_id), oldId, newMsgObj.id, 0, false, scheduled ? 1 : 0, newMsgObj.quick_reply_shortcut_id);
+                                    getMessagesStorage().putMessages(sentMessages, true, false, false, 0, mode, newMsgObj.quick_reply_shortcut_id);
                                     AndroidUtilities.runOnUIThread(() -> {
                                         getMediaDataController().increasePeerRaiting(newMsgObj.dialog_id);
                                         getNotificationCenter().postNotificationName(NotificationCenter.messageReceivedByServer, oldId, newMsgObj.id, newMsgObj, newMsgObj.dialog_id, 0L, existFlags, scheduled);
                                         processSentMessage(oldId);
                                         removeFromSendingMessages(oldId, scheduled);
                                     });
-                                    if (MessageObject.isVideoMessage(newMsgObj) || MessageObject.isRoundVideoMessage(newMsgObj) || MessageObject.isNewGifMessage(newMsgObj)) {
-                                        stopVideoService(attachPath);
-                                    }
                                 });
                             }
                         }
@@ -5845,13 +6218,10 @@ public class SendMessagesHelper extends BaseController implements NotificationCe
                         isSentError = true;
                     }
                     if (isSentError) {
-                        getMessagesStorage().markMessageAsSendError(newMsgObj, scheduled);
+                        getMessagesStorage().markMessageAsSendError(newMsgObj, scheduled ? 1 : 0);
                         newMsgObj.send_state = MessageObject.MESSAGE_SEND_STATE_SEND_ERROR;
                         getNotificationCenter().postNotificationName(NotificationCenter.messageSendError, newMsgObj.id);
                         processSentMessage(newMsgObj.id);
-                        if (MessageObject.isVideoMessage(newMsgObj) || MessageObject.isRoundVideoMessage(newMsgObj) || MessageObject.isNewGifMessage(newMsgObj)) {
-                            stopVideoService(newMsgObj.attachPath);
-                        }
                         removeFromSendingMessages(newMsgObj.id, scheduled);
                     }
                 });
@@ -5875,7 +6245,9 @@ public class SendMessagesHelper extends BaseController implements NotificationCe
         if (newMsg.media != null) {
             TLRPC.PhotoSize strippedOld = null;
             TLObject photoObject = null;
-            if (newMsgObj.isLiveLocation() && sentMessage.media instanceof TLRPC.TL_messageMediaGeoLive) {
+            if (newMsg.media.storyItem != null) {
+                sentMessage.media = newMsg.media;
+            } else if (newMsgObj.isLiveLocation() && sentMessage.media instanceof TLRPC.TL_messageMediaGeoLive) {
                 newMsg.media.period = sentMessage.media.period;
             } else if (newMsgObj.isDice()) {
                 TLRPC.TL_messageMediaDice mediaDice = (TLRPC.TL_messageMediaDice) newMsg.media;
@@ -6047,7 +6419,7 @@ public class SendMessagesHelper extends BaseController implements NotificationCe
             newMsg.media.document.size = sentMessage.media.document.size;
             newMsg.media.document.mime_type = sentMessage.media.document.mime_type;
 
-            if ((sentMessage.flags & TLRPC.MESSAGE_FLAG_FWD) == 0 && MessageObject.isOut(sentMessage)) {
+            if ((sentMessage.flags & TLRPC.MESSAGE_FLAG_FWD) == 0 && MessageObject.isOut(sentMessage) && !MessageObject.isQuickReply(sentMessage)) {
                 if (MessageObject.isNewGifDocument(sentMessage.media.document)) {
                     boolean save;
                     if (MessageObject.isDocumentHasAttachedStickers(sentMessage.media.document)) {
@@ -6357,7 +6729,7 @@ public class SendMessagesHelper extends BaseController implements NotificationCe
     private final static int ERROR_TYPE_UNSUPPORTED = 1;
     private final static int ERROR_TYPE_FILE_TOO_LARGE = 2;
 
-    private static int prepareSendingDocumentInternal(AccountInstance accountInstance, String path, String originalPath, Uri uri, String mime, long dialogId, MessageObject replyToMsg, MessageObject replyToTopMsg, CharSequence caption, final ArrayList<TLRPC.MessageEntity> entities, final MessageObject editingMessageObject, long[] groupId, boolean isGroupFinal, boolean forceDocument, boolean notify, int scheduleDate, Integer[] docType) {
+    private static int prepareSendingDocumentInternal(AccountInstance accountInstance, String path, String originalPath, Uri uri, String mime, long dialogId, MessageObject replyToMsg, MessageObject replyToTopMsg, TL_stories.StoryItem storyItem, ChatActivity.ReplyQuote quote, final ArrayList<TLRPC.MessageEntity> entities, final MessageObject editingMessageObject, long[] groupId, boolean isGroupFinal, CharSequence caption, boolean notify, int scheduleDate, Integer[] docType, boolean forceDocument, String quickReplyShortcut, int quickReplyShortcutId) {
         if ((path == null || path.length() == 0) && uri == null) {
             return ERROR_TYPE_UNSUPPORTED;
         }
@@ -6580,6 +6952,13 @@ public class SendMessagesHelper extends BaseController implements NotificationCe
                     attributeImageSize.w = bmOptions.outWidth;
                     attributeImageSize.h = bmOptions.outHeight;
                     document.attributes.add(attributeImageSize);
+
+                    Bitmap bitmap = ImageLoader.loadBitmap(f.getAbsolutePath(), null, 400, 400, true);
+                    TLRPC.PhotoSize thumb = ImageLoader.scaleAndSaveImage(null, bitmap, Bitmap.CompressFormat.PNG, false, 400, 400, 100, isEncrypted, 0, 0, false);
+                    if (thumb != null) {
+                        document.thumbs.add(thumb);
+                        document.flags |= 1;
+                    }
                 }
             }
         }
@@ -6630,7 +7009,12 @@ public class SendMessagesHelper extends BaseController implements NotificationCe
             if (editingMessageObject != null) {
                 accountInstance.getSendMessagesHelper().editMessage(editingMessageObject, null, null, documentFinal, pathFinal, params, false, false, parentFinal);
             } else {
-                accountInstance.getSendMessagesHelper().sendMessage(documentFinal, null, pathFinal, dialogId, replyToMsg, replyToTopMsg, captionFinal, entities, null, params, notify, scheduleDate, 0, parentFinal, null, false);
+                SendMessageParams sendMessageParams = SendMessagesHelper.SendMessageParams.of(documentFinal, null, pathFinal, dialogId, replyToMsg, replyToTopMsg, captionFinal, entities, null, params, notify, scheduleDate, 0, parentFinal, null, false);
+                sendMessageParams.replyToStoryItem = storyItem;
+                sendMessageParams.replyQuote = quote;
+                sendMessageParams.quick_reply_shortcut = quickReplyShortcut;
+                sendMessageParams.quick_reply_shortcut_id = quickReplyShortcutId;
+                accountInstance.getSendMessagesHelper().sendMessage(sendMessageParams);
             }
         });
         return 0;
@@ -6661,7 +7045,7 @@ public class SendMessagesHelper extends BaseController implements NotificationCe
     }
 
     @UiThread
-    public static void prepareSendingDocument(AccountInstance accountInstance, String path, String originalPath, Uri uri, String caption, String mine, long dialogId, MessageObject replyToMsg, MessageObject replyToTopMsg, InputContentInfoCompat inputContent, MessageObject editingMessageObject, boolean notify, int scheduleDate) {
+    public static void prepareSendingDocument(AccountInstance accountInstance, String path, String originalPath, Uri uri, String caption, String mine, long dialogId, MessageObject replyToMsg, MessageObject replyToTopMsg, TL_stories.StoryItem storyItem, ChatActivity.ReplyQuote quote, MessageObject editingMessageObject, boolean notify, int scheduleDate, InputContentInfoCompat inputContent, String quickReplyShortcut, int quickReplyShortcutId) {
         if ((path == null || originalPath == null) && uri == null) {
             return;
         }
@@ -6676,11 +7060,11 @@ public class SendMessagesHelper extends BaseController implements NotificationCe
             paths.add(path);
             originalPaths.add(originalPath);
         }
-        prepareSendingDocuments(accountInstance, paths, originalPaths, uris, caption, mine, dialogId, replyToMsg, replyToTopMsg, inputContent, editingMessageObject, notify, scheduleDate);
+        prepareSendingDocuments(accountInstance, paths, originalPaths, uris, caption, mine, dialogId, replyToMsg, replyToTopMsg, storyItem, quote, editingMessageObject, notify, scheduleDate, inputContent, quickReplyShortcut, quickReplyShortcutId);
     }
 
     @UiThread
-    public static void prepareSendingAudioDocuments(AccountInstance accountInstance, ArrayList<MessageObject> messageObjects, CharSequence caption, long dialogId, MessageObject replyToMsg, MessageObject replyToTopMsg, MessageObject editingMessageObject, boolean notify, int scheduleDate) {
+    public static void prepareSendingAudioDocuments(AccountInstance accountInstance, ArrayList<MessageObject> messageObjects, CharSequence caption, long dialogId, MessageObject replyToMsg, MessageObject replyToTopMsg, TL_stories.StoryItem storyItem, boolean notify, int scheduleDate, MessageObject editingMessageObject, String quickReplyShortcut, int quickReplyShortcutId) {
         new Thread(() -> {
             int count = messageObjects.size();
             long groupId = 0;
@@ -6743,7 +7127,11 @@ public class SendMessagesHelper extends BaseController implements NotificationCe
                     if (editingMessageObject != null) {
                         accountInstance.getSendMessagesHelper().editMessage(editingMessageObject, null, null, documentFinal, messageObject.messageOwner.attachPath, params, false, false, parentFinal);
                     } else {
-                        accountInstance.getSendMessagesHelper().sendMessage(documentFinal, null, messageObject.messageOwner.attachPath, dialogId, replyToMsg, replyToTopMsg, captionFinal, entities, null, params, notify, scheduleDate, 0, parentFinal, null, false, false);
+                        SendMessageParams sendMessageParams = SendMessageParams.of(documentFinal, null, messageObject.messageOwner.attachPath, dialogId, replyToMsg, replyToTopMsg, captionFinal, entities, null, params, notify, scheduleDate, 0, parentFinal, null, false, false);
+                        sendMessageParams.replyToStoryItem = storyItem;
+                        sendMessageParams.quick_reply_shortcut = quickReplyShortcut;
+                        sendMessageParams.quick_reply_shortcut_id = quickReplyShortcutId;
+                        accountInstance.getSendMessagesHelper().sendMessage(sendMessageParams);
                     }
                 });
             }
@@ -6764,14 +7152,14 @@ public class SendMessagesHelper extends BaseController implements NotificationCe
 
                 TLRPC.TL_messages_messages messagesRes = new TLRPC.TL_messages_messages();
                 messagesRes.messages.add(prevMessage.messageOwner);
-                accountInstance.getMessagesStorage().putMessages(messagesRes, message.peer, -2, 0, false, scheduleDate != 0, 0);
+                accountInstance.getMessagesStorage().putMessages(messagesRes, message.peer, -2, 0, false, scheduleDate != 0 ? 1 : 0, 0);
                 instance.sendReadyToSendGroup(message, true, true);
             }
         });
     }
 
     @UiThread
-    public static void prepareSendingDocuments(AccountInstance accountInstance, ArrayList<String> paths, ArrayList<String> originalPaths, ArrayList<Uri> uris, String caption, String mime, long dialogId, MessageObject replyToMsg, MessageObject replyToTopMsg, InputContentInfoCompat inputContent, MessageObject editingMessageObject, boolean notify, int scheduleDate) {
+    public static void prepareSendingDocuments(AccountInstance accountInstance, ArrayList<String> paths, ArrayList<String> originalPaths, ArrayList<Uri> uris, String caption, String mime, long dialogId, MessageObject replyToMsg, MessageObject replyToTopMsg, TL_stories.StoryItem storyItem, ChatActivity.ReplyQuote quote, MessageObject editingMessageObject, boolean notify, int scheduleDate, InputContentInfoCompat inputContent, String quickReplyShortcut, int quickReplyShortcutId) {
         if (paths == null && originalPaths == null && uris == null || paths != null && originalPaths != null && paths.size() != originalPaths.size()) {
             return;
         }
@@ -6796,7 +7184,7 @@ public class SendMessagesHelper extends BaseController implements NotificationCe
                     }
                     mediaCount++;
                     long prevGroupId = groupId[0];
-                    error = prepareSendingDocumentInternal(accountInstance, paths.get(a), originalPaths.get(a), null, mime, dialogId, replyToMsg, replyToTopMsg, captionFinal, null, editingMessageObject, groupId, mediaCount == 10 || a == count - 1, inputContent == null, notify, scheduleDate, docType);
+                    error = prepareSendingDocumentInternal(accountInstance, paths.get(a), originalPaths.get(a), null, mime, dialogId, replyToMsg, replyToTopMsg, storyItem, quote, null, editingMessageObject, groupId, mediaCount == 10 || a == count - 1, captionFinal, notify, scheduleDate, docType, inputContent == null, quickReplyShortcut, quickReplyShortcutId);
                     if (prevGroupId != groupId[0] || groupId[0] == -1) {
                         mediaCount = 1;
                     }
@@ -6817,7 +7205,7 @@ public class SendMessagesHelper extends BaseController implements NotificationCe
                     }
                     mediaCount++;
                     long prevGroupId = groupId[0];
-                    error = prepareSendingDocumentInternal(accountInstance, null, null, uris.get(a), mime, dialogId, replyToMsg, replyToTopMsg, captionFinal, null, editingMessageObject, groupId, mediaCount == 10 || a == count - 1, inputContent == null, notify, scheduleDate, docType);
+                    error = prepareSendingDocumentInternal(accountInstance, null, null, uris.get(a), mime, dialogId, replyToMsg, replyToTopMsg, storyItem, quote, null, editingMessageObject, groupId, mediaCount == 10 || a == count - 1, captionFinal, notify, scheduleDate, docType, inputContent == null, quickReplyShortcut, quickReplyShortcutId);
                     if (prevGroupId != groupId[0] || groupId[0] == -1) {
                         mediaCount = 1;
                     }
@@ -6848,12 +7236,12 @@ public class SendMessagesHelper extends BaseController implements NotificationCe
     }
 
     @UiThread
-    public static void prepareSendingPhoto(AccountInstance accountInstance, String imageFilePath, Uri imageUri, long dialogId, MessageObject replyToMsg, MessageObject replyToTopMsg, CharSequence caption, ArrayList<TLRPC.MessageEntity> entities, ArrayList<TLRPC.InputDocument> stickers, InputContentInfoCompat inputContent, int ttl, MessageObject editingMessageObject, boolean notify, int scheduleDate) {
-        prepareSendingPhoto(accountInstance, imageFilePath, null, imageUri, dialogId, replyToMsg, replyToTopMsg, caption, entities, stickers, inputContent, ttl, editingMessageObject, null, notify, scheduleDate, false);
+    public static void prepareSendingPhoto(AccountInstance accountInstance, String imageFilePath, Uri imageUri, long dialogId, MessageObject replyToMsg, MessageObject replyToTopMsg, ChatActivity.ReplyQuote quote, CharSequence caption, ArrayList<TLRPC.MessageEntity> entities, ArrayList<TLRPC.InputDocument> stickers, InputContentInfoCompat inputContent, int ttl, MessageObject editingMessageObject, boolean notify, int scheduleDate, int mode, String quickReplyShortcut, int quickReplyShortcutId) {
+        prepareSendingPhoto(accountInstance, imageFilePath, null, imageUri, dialogId, replyToMsg, replyToTopMsg, null, null, entities, stickers, inputContent, ttl, editingMessageObject, null, notify, scheduleDate, mode, false, caption, quickReplyShortcut, quickReplyShortcutId);
     }
 
     @UiThread
-    public static void prepareSendingPhoto(AccountInstance accountInstance, String imageFilePath, String thumbFilePath, Uri imageUri, long dialogId, MessageObject replyToMsg, MessageObject replyToTopMsg, CharSequence caption, ArrayList<TLRPC.MessageEntity> entities, ArrayList<TLRPC.InputDocument> stickers, InputContentInfoCompat inputContent, int ttl, MessageObject editingMessageObject, VideoEditedInfo videoEditedInfo, boolean notify, int scheduleDate, boolean forceDocument) {
+    public static void prepareSendingPhoto(AccountInstance accountInstance, String imageFilePath, String thumbFilePath, Uri imageUri, long dialogId, MessageObject replyToMsg, MessageObject replyToTopMsg, TL_stories.StoryItem storyItem, ChatActivity.ReplyQuote quote, ArrayList<TLRPC.MessageEntity> entities, ArrayList<TLRPC.InputDocument> stickers, InputContentInfoCompat inputContent, int ttl, MessageObject editingMessageObject, VideoEditedInfo videoEditedInfo, boolean notify, int scheduleDate, int mode, boolean forceDocument, CharSequence caption, String quickReplyShortcut, int quickReplyShortcutId) {
         SendingMediaInfo info = new SendingMediaInfo();
         info.path = imageFilePath;
         info.thumbPath = thumbFilePath;
@@ -6869,11 +7257,11 @@ public class SendMessagesHelper extends BaseController implements NotificationCe
         info.videoEditedInfo = videoEditedInfo;
         ArrayList<SendingMediaInfo> infos = new ArrayList<>();
         infos.add(info);
-        prepareSendingMedia(accountInstance, infos, dialogId, replyToMsg, replyToTopMsg, inputContent, forceDocument, false, editingMessageObject, notify, scheduleDate, false);
+        prepareSendingMedia(accountInstance, infos, dialogId, replyToMsg, replyToTopMsg, null, quote, forceDocument, false, editingMessageObject, notify, scheduleDate, mode, false, inputContent, quickReplyShortcut, quickReplyShortcutId);
     }
 
     @UiThread
-    public static void prepareSendingBotContextResult(BaseFragment fragment, AccountInstance accountInstance, TLRPC.BotInlineResult result, HashMap<String, String> params, long dialogId, MessageObject replyToMsg, MessageObject replyToTopMsg, boolean notify, int scheduleDate) {
+    public static void prepareSendingBotContextResult(BaseFragment fragment, AccountInstance accountInstance, TLRPC.BotInlineResult result, HashMap<String, String> params, long dialogId, MessageObject replyToMsg, MessageObject replyToTopMsg, TL_stories.StoryItem storyItem, ChatActivity.ReplyQuote quote, boolean notify, int scheduleDate, String quick_reply_shortcut, int quick_reply_shortcut_id) {
         if (result == null) {
             return;
         }
@@ -7141,15 +7529,23 @@ public class SendMessagesHelper extends BaseController implements NotificationCe
                     return;
                 }
                 AndroidUtilities.runOnUIThread(() -> {
+                    SendMessageParams params2 = null;
                     if (finalDocument != null) {
                         if (precahcedThumb[0] != null && precachedKey[0] != null) {
                             ImageLoader.getInstance().putImageToCache(new BitmapDrawable(precahcedThumb[0]), precachedKey[0], false);
                         }
-                        accountInstance.getSendMessagesHelper().sendMessage(finalDocument, null, finalPathFinal, dialogId, replyToMsg, replyToTopMsg, result.send_message.message, result.send_message.entities, result.send_message.reply_markup, params, notify, scheduleDate, 0, result, null, false);
+                        params2 = SendMessageParams.of(finalDocument, null, finalPathFinal, dialogId, replyToMsg, replyToTopMsg, result.send_message.message, result.send_message.entities, result.send_message.reply_markup, params, notify, scheduleDate, 0, result, null, false);
                     } else if (finalPhoto != null) {
-                        accountInstance.getSendMessagesHelper().sendMessage(finalPhoto, result.content != null ? result.content.url : null, dialogId, replyToMsg, replyToTopMsg, result.send_message.message, result.send_message.entities, result.send_message.reply_markup, params, notify, scheduleDate, 0, result, false);
+                        params2 = SendMessageParams.of(finalPhoto, result.content != null ? result.content.url : null, dialogId, replyToMsg, replyToTopMsg, result.send_message.message, result.send_message.entities, result.send_message.reply_markup, params, notify, scheduleDate, 0, result, false);
                     } else if (finalGame != null) {
-                        accountInstance.getSendMessagesHelper().sendMessage(finalGame, dialogId, replyToMsg, replyToTopMsg, result.send_message.reply_markup, params, notify, scheduleDate);
+                        params2 = SendMessageParams.of(finalGame, dialogId, replyToMsg, replyToTopMsg, result.send_message.reply_markup, params, notify, scheduleDate);
+                    }
+                    if (params2 != null) {
+                        params2.quick_reply_shortcut = quick_reply_shortcut;
+                        params2.quick_reply_shortcut_id = quick_reply_shortcut_id;
+                        params2.replyToStoryItem = storyItem;
+                        params2.replyQuote = quote;
+                        accountInstance.getSendMessagesHelper().sendMessage(params2);
                     }
                 });
             }).run();
@@ -7165,7 +7561,10 @@ public class SendMessagesHelper extends BaseController implements NotificationCe
                     }
                 }
             }
-            accountInstance.getSendMessagesHelper().sendMessage(result.send_message.message, dialogId, replyToMsg, replyToTopMsg, webPage, !result.send_message.no_webpage, result.send_message.entities, result.send_message.reply_markup, params, notify, scheduleDate, null, false);
+            SendMessagesHelper.SendMessageParams params2 = SendMessagesHelper.SendMessageParams.of(result.send_message.message, dialogId, replyToMsg, replyToTopMsg, webPage, !result.send_message.no_webpage, result.send_message.entities, result.send_message.reply_markup, params, notify, scheduleDate, null, false);
+            params2.quick_reply_shortcut = quick_reply_shortcut;
+            params2.quick_reply_shortcut_id = quick_reply_shortcut_id;
+            accountInstance.getSendMessagesHelper().sendMessage(params2);
         } else if (result.send_message instanceof TLRPC.TL_botInlineMessageMediaVenue) {
             TLRPC.TL_messageMediaVenue venue = new TLRPC.TL_messageMediaVenue();
             venue.geo = result.send_message.geo;
@@ -7177,21 +7576,28 @@ public class SendMessagesHelper extends BaseController implements NotificationCe
             if (venue.venue_type == null) {
                 venue.venue_type = "";
             }
-            accountInstance.getSendMessagesHelper().sendMessage(venue, dialogId, replyToMsg, replyToTopMsg, result.send_message.reply_markup, params, notify, scheduleDate);
+            SendMessagesHelper.SendMessageParams params2 = SendMessagesHelper.SendMessageParams.of(venue, dialogId, replyToMsg, replyToTopMsg, result.send_message.reply_markup, params, notify, scheduleDate);
+            params2.quick_reply_shortcut = quick_reply_shortcut;
+            params2.quick_reply_shortcut_id = quick_reply_shortcut_id;
+            accountInstance.getSendMessagesHelper().sendMessage(params2);
         } else if (result.send_message instanceof TLRPC.TL_botInlineMessageMediaGeo) {
+            SendMessagesHelper.SendMessageParams params2;
             if (result.send_message.period != 0 || result.send_message.proximity_notification_radius != 0) {
                 TLRPC.TL_messageMediaGeoLive location = new TLRPC.TL_messageMediaGeoLive();
                 location.period = result.send_message.period != 0 ? result.send_message.period : 900;
                 location.geo = result.send_message.geo;
                 location.heading = result.send_message.heading;
                 location.proximity_notification_radius = result.send_message.proximity_notification_radius;
-                accountInstance.getSendMessagesHelper().sendMessage(location, dialogId, replyToMsg, replyToTopMsg, result.send_message.reply_markup, params, notify, scheduleDate);
+                params2 = SendMessagesHelper.SendMessageParams.of(location, dialogId, replyToMsg, replyToTopMsg, result.send_message.reply_markup, params, notify, scheduleDate);
             } else {
                 TLRPC.TL_messageMediaGeo location = new TLRPC.TL_messageMediaGeo();
                 location.geo = result.send_message.geo;
                 location.heading = result.send_message.heading;
-                accountInstance.getSendMessagesHelper().sendMessage(location, dialogId, replyToMsg, replyToTopMsg, result.send_message.reply_markup, params, notify, scheduleDate);
+                params2 = SendMessagesHelper.SendMessageParams.of(location, dialogId, replyToMsg, replyToTopMsg, result.send_message.reply_markup, params, notify, scheduleDate);
             }
+            params2.quick_reply_shortcut = quick_reply_shortcut;
+            params2.quick_reply_shortcut_id = quick_reply_shortcut_id;
+            accountInstance.getSendMessagesHelper().sendMessage(params2);
         } else if (result.send_message instanceof TLRPC.TL_botInlineMessageMediaContact) {
             TLRPC.User user = new TLRPC.TL_user();
             user.phone = result.send_message.phone_number;
@@ -7202,7 +7608,10 @@ public class SendMessagesHelper extends BaseController implements NotificationCe
             reason.platform = "";
             reason.reason = "";
             user.restriction_reason.add(reason);
-            accountInstance.getSendMessagesHelper().sendMessage(user, dialogId, replyToMsg, replyToTopMsg, result.send_message.reply_markup, params, notify, scheduleDate);
+            SendMessagesHelper.SendMessageParams params2 = SendMessagesHelper.SendMessageParams.of(user, dialogId, replyToMsg, replyToTopMsg, result.send_message.reply_markup, params, notify, scheduleDate);
+            params2.quick_reply_shortcut = quick_reply_shortcut;
+            params2.quick_reply_shortcut_id = quick_reply_shortcut_id;
+            accountInstance.getSendMessagesHelper().sendMessage(params2);
         } else if (result.send_message instanceof TLRPC.TL_botInlineMessageMediaInvoice) {
             if (DialogObject.isEncryptedDialog(dialogId)) {
                 return; //doesn't work in secret chats for now
@@ -7220,7 +7629,18 @@ public class SendMessagesHelper extends BaseController implements NotificationCe
             messageMediaInvoice.currency = invoice.currency;
             messageMediaInvoice.total_amount = invoice.total_amount;
             messageMediaInvoice.start_param = "";
-            accountInstance.getSendMessagesHelper().sendMessage(messageMediaInvoice, dialogId, replyToMsg, replyToTopMsg, result.send_message.reply_markup, params, notify, scheduleDate);
+            SendMessagesHelper.SendMessageParams params2 = SendMessagesHelper.SendMessageParams.of(messageMediaInvoice, dialogId, replyToMsg, replyToTopMsg, result.send_message.reply_markup, params, notify, scheduleDate);
+            params2.quick_reply_shortcut = quick_reply_shortcut;
+            params2.quick_reply_shortcut_id = quick_reply_shortcut_id;
+            accountInstance.getSendMessagesHelper().sendMessage(params2);
+        } else if (result.send_message instanceof TLRPC.TL_botInlineMessageMediaWebPage) {
+            TLRPC.TL_botInlineMessageMediaWebPage request = (TLRPC.TL_botInlineMessageMediaWebPage) result.send_message;
+            TLRPC.WebPage webPage = new TLRPC.TL_webPagePending();
+            webPage.url = request.url;
+            SendMessagesHelper.SendMessageParams params2 = SendMessagesHelper.SendMessageParams.of(result.send_message.message, dialogId, replyToMsg, replyToTopMsg, webPage, !result.send_message.no_webpage, result.send_message.entities, result.send_message.reply_markup, params, notify, scheduleDate, null, false);
+            params2.quick_reply_shortcut = quick_reply_shortcut;
+            params2.quick_reply_shortcut_id = quick_reply_shortcut_id;
+            accountInstance.getSendMessagesHelper().sendMessage(params2);
         }
     }
 
@@ -7244,7 +7664,7 @@ public class SendMessagesHelper extends BaseController implements NotificationCe
     }
 
     @UiThread
-    public static void prepareSendingText(AccountInstance accountInstance, String text, long dialogId, int topicId, boolean notify, int scheduleDate) {
+    public static void prepareSendingText(AccountInstance accountInstance, String text, long dialogId, long topicId, boolean notify, int scheduleDate) {
         accountInstance.getMessagesStorage().getStorageQueue().postRunnable(() -> Utilities.stageQueue.postRunnable(() -> AndroidUtilities.runOnUIThread(() -> {
             String textFinal = getTrimmedString(text);
             if (textFinal.length() != 0) {
@@ -7259,7 +7679,7 @@ public class SendMessagesHelper extends BaseController implements NotificationCe
                 }
                 for (int a = 0; a < count; a++) {
                     String mess = textFinal.substring(a * 4096, Math.min((a + 1) * 4096, textFinal.length()));
-                    accountInstance.getSendMessagesHelper().sendMessage(mess, dialogId, replyToMsg, replyToMsg, null, true, null, null, null, notify, scheduleDate, null, false);
+                    accountInstance.getSendMessagesHelper().sendMessage(SendMessagesHelper.SendMessageParams.of(mess, dialogId, replyToMsg, replyToMsg, null, true, null, null, null, notify, scheduleDate, null, false));
                 }
             }
         })));
@@ -7392,7 +7812,7 @@ public class SendMessagesHelper extends BaseController implements NotificationCe
     }
 
     @UiThread
-    public static void prepareSendingMedia(AccountInstance accountInstance, ArrayList<SendingMediaInfo> media, long dialogId, MessageObject replyToMsg, MessageObject replyToTopMsg, InputContentInfoCompat inputContent, boolean forceDocument, boolean groupMedia, MessageObject editingMessageObject, boolean notify, int scheduleDate, boolean updateStikcersOrder) {
+    public static void prepareSendingMedia(AccountInstance accountInstance, ArrayList<SendingMediaInfo> media, long dialogId, MessageObject replyToMsg, MessageObject replyToTopMsg, TL_stories.StoryItem storyItem, ChatActivity.ReplyQuote quote, boolean forceDocument, boolean groupMedia, MessageObject editingMessageObject, boolean notify, int scheduleDate, int mode, boolean updateStikcersOrder, InputContentInfoCompat inputContent, String quickReplyShortcut, int quickReplyShortcutId) {
         if (media.isEmpty()) {
             return;
         }
@@ -7423,7 +7843,7 @@ public class SendMessagesHelper extends BaseController implements NotificationCe
 
                         boolean isWebP = false;
                         if (tempPath != null && info.ttl <= 0 && (tempPath.endsWith(".gif") || (isWebP = tempPath.endsWith(".webp")))) {
-                            if (media.size() <= 1 && (!isWebP || shouldSendWebPAsSticker(tempPath, null))) {
+                            if (media.size() <= 1 && (!isWebP || shouldSendWebPAsSticker(tempPath, null)) && TextUtils.isEmpty(info.caption)) {
                                 continue;
                             } else {
                                 info.forceImage = true;
@@ -7432,7 +7852,7 @@ public class SendMessagesHelper extends BaseController implements NotificationCe
                             continue;
                         } else if (tempPath == null && info.uri != null) {
                             if (MediaController.isGif(info.uri) || (isWebP = MediaController.isWebp(info.uri))) {
-                                if (media.size() <= 1 && (!isWebP || shouldSendWebPAsSticker(null, info.uri))) {
+                                if (media.size() <= 1 && (!isWebP || shouldSendWebPAsSticker(null, info.uri)) && TextUtils.isEmpty(info.caption)) {
                                     continue;
                                 } else {
                                     info.forceImage = true;
@@ -7596,7 +8016,12 @@ public class SendMessagesHelper extends BaseController implements NotificationCe
                             if (editingMessageObject != null) {
                                 accountInstance.getSendMessagesHelper().editMessage(editingMessageObject, null, null, documentFinal, pathFinal, params, false, info.hasMediaSpoilers, parentFinal);
                             } else {
-                                accountInstance.getSendMessagesHelper().sendMessage(documentFinal, null, pathFinal, dialogId, replyToMsg, replyToTopMsg, info.caption, info.entities, null, params, notify, scheduleDate, 0, parentFinal, null, false, info.hasMediaSpoilers);
+                                SendMessageParams sendMessageParams = SendMessageParams.of(documentFinal, null, pathFinal, dialogId, replyToMsg, replyToTopMsg, info.caption, info.entities, null, params, notify, scheduleDate, 0, parentFinal, null, false, info.hasMediaSpoilers);
+                                sendMessageParams.replyToStoryItem = storyItem;
+                                sendMessageParams.replyQuote = quote;
+                                sendMessageParams.quick_reply_shortcut = quickReplyShortcut;
+                                sendMessageParams.quick_reply_shortcut_id = quickReplyShortcutId;
+                                accountInstance.getSendMessagesHelper().sendMessage(sendMessageParams);
                             }
                         });
                     } else {
@@ -7667,7 +8092,12 @@ public class SendMessagesHelper extends BaseController implements NotificationCe
                                 if (editingMessageObject != null) {
                                     accountInstance.getSendMessagesHelper().editMessage(editingMessageObject, photoFinal, null, null, needDownloadHttpFinal ? info.searchImage.imageUrl : null, params, false, info.hasMediaSpoilers, parentFinal);
                                 } else {
-                                    accountInstance.getSendMessagesHelper().sendMessage(photoFinal, needDownloadHttpFinal ? info.searchImage.imageUrl : null, dialogId, replyToMsg, replyToTopMsg, info.caption, info.entities, null, params, notify, scheduleDate, info.ttl, parentFinal, false, info.hasMediaSpoilers);
+                                    SendMessageParams sendMessageParams = SendMessageParams.of(photoFinal, needDownloadHttpFinal ? info.searchImage.imageUrl : null, dialogId, replyToMsg, replyToTopMsg, info.caption, info.entities, null, params, notify, scheduleDate, info.ttl, parentFinal, false, info.hasMediaSpoilers);
+                                    sendMessageParams.replyToStoryItem = storyItem;
+                                    sendMessageParams.replyQuote = quote;
+                                    sendMessageParams.quick_reply_shortcut_id = quickReplyShortcutId;
+                                    sendMessageParams.quick_reply_shortcut = quickReplyShortcut;
+                                    accountInstance.getSendMessagesHelper().sendMessage(sendMessageParams);
                                 }
                             });
                         }
@@ -7730,30 +8160,39 @@ public class SendMessagesHelper extends BaseController implements NotificationCe
                                 }
 
                                 TLRPC.PhotoSize size = null;
-                                String localPath = null;
                                 if (thumb != null) {
                                     int side = isEncrypted || info.ttl != 0 ? 90 : Math.max(thumb.getWidth(), thumb.getHeight());
                                     size = ImageLoader.scaleAndSaveImage(thumb, side, side, side > 90 ? 80 : 55, isEncrypted);
                                     if (size != null && size.location != null) {
                                         thumbKey = getKeyForPhotoSize(accountInstance, size, null, true, false);
-
-                                        String fileName = size.location.volume_id + "_" + size.location.local_id + ".jpg";
-                                        File fileDir = FileLoader.getDirectory(FileLoader.MEDIA_DIR_CACHE);
-                                        localPath = new File(fileDir, fileName).getAbsolutePath();
                                     }
                                 }
                                 document = new TLRPC.TL_document();
                                 document.file_reference = new byte[0];
-                                document.localPath = localPath;
                                 if (size != null) {
                                     document.thumbs.add(size);
                                     document.flags |= 1;
                                 }
-                                document.mime_type = "video/mp4";
+                                if (info.videoEditedInfo != null && info.videoEditedInfo.isSticker) {
+                                    document.mime_type = "video/webm";
+                                } else {
+                                    document.mime_type = "video/mp4";
+                                }
                                 accountInstance.getUserConfig().saveConfig(false);
+                                if (info.videoEditedInfo != null && info.videoEditedInfo.isSticker) {
+                                    document.attributes.add(new TLRPC.TL_documentAttributeAnimated());
+                                    TLRPC.TL_documentAttributeSticker sticker = new TLRPC.TL_documentAttributeSticker();
+                                    sticker.alt = "👍";
+                                    sticker.stickerset = new TLRPC.TL_inputStickerSetEmpty();
+                                    document.attributes.add(sticker);
+//                                    document.size = videoEditedInfo.estimatedSize;
+                                    if (size != null && size.location != null) {
+                                        thumbKey = String.format(Locale.US, "%d_%d@b1", size.location.volume_id, size.location.local_id);
+                                    }
+                                }
                                 TLRPC.TL_documentAttributeVideo attributeVideo;
                                 if (isEncrypted) {
-                                    attributeVideo = new TLRPC.TL_documentAttributeVideo();
+                                    attributeVideo = new TLRPC.TL_documentAttributeVideo_layer159();
                                 } else {
                                     attributeVideo = new TLRPC.TL_documentAttributeVideo();
                                     attributeVideo.supports_streaming = true;
@@ -7804,7 +8243,8 @@ public class SendMessagesHelper extends BaseController implements NotificationCe
                                 }
                             }
                             if (videoEditedInfo != null && (videoEditedInfo.needConvert() || !info.isVideo)) {
-                                String fileName = Integer.MIN_VALUE + "_" + SharedConfig.getLastLocalId() + ".mp4";
+                                String ext = videoEditedInfo.isSticker ? "webm" : "mp4";
+                                String fileName = Integer.MIN_VALUE + "_" + SharedConfig.getLastLocalId() + "." + ext;
                                 File cacheFile = new File(FileLoader.getDirectory(FileLoader.MEDIA_DIR_CACHE), fileName);
                                 SharedConfig.saveConfig();
                                 path = cacheFile.getAbsolutePath();
@@ -7830,7 +8270,7 @@ public class SendMessagesHelper extends BaseController implements NotificationCe
                                     lastGroupId = 0;
                                 }
                             }
-                            if (!isEncrypted && info.masks != null && !info.masks.isEmpty()) {
+                            if (!isEncrypted && (videoEditedInfo == null || !videoEditedInfo.isSticker) && info.masks != null && !info.masks.isEmpty()) {
                                 document.attributes.add(new TLRPC.TL_documentAttributeHasStickers());
                                 SerializedData serializedData = new SerializedData(4 + info.masks.size() * 20);
                                 serializedData.writeInt32(info.masks.size());
@@ -7847,7 +8287,12 @@ public class SendMessagesHelper extends BaseController implements NotificationCe
                                 if (editingMessageObject != null) {
                                     accountInstance.getSendMessagesHelper().editMessage(editingMessageObject, null, videoEditedInfo, videoFinal, finalPath, params, false, info.hasMediaSpoilers, parentFinal);
                                 } else {
-                                    accountInstance.getSendMessagesHelper().sendMessage(videoFinal, videoEditedInfo, finalPath, dialogId, replyToMsg, replyToTopMsg, info.caption, info.entities, null, params, notify, scheduleDate, info.ttl, parentFinal, null, false, info.hasMediaSpoilers);
+                                    SendMessageParams sendMessageParams = SendMessageParams.of(videoFinal, videoEditedInfo, finalPath, dialogId, replyToMsg, replyToTopMsg, info.caption, info.entities, null, params, notify, scheduleDate, info.ttl, parentFinal, null, false, info.hasMediaSpoilers);
+                                    sendMessageParams.replyToStoryItem = storyItem;
+                                    sendMessageParams.replyQuote = quote;
+                                    sendMessageParams.quick_reply_shortcut = quickReplyShortcut;
+                                    sendMessageParams.quick_reply_shortcut_id = quickReplyShortcutId;
+                                    accountInstance.getSendMessagesHelper().sendMessage(sendMessageParams);
                                 }
                             });
                         } else {
@@ -8044,7 +8489,12 @@ public class SendMessagesHelper extends BaseController implements NotificationCe
                                     if (editingMessageObject != null) {
                                         accountInstance.getSendMessagesHelper().editMessage(editingMessageObject, photoFinal, null, null, null, params, false, info.hasMediaSpoilers, parentFinal);
                                     } else {
-                                        accountInstance.getSendMessagesHelper().sendMessage(photoFinal, null, dialogId, replyToMsg, replyToTopMsg, info.caption, info.entities, null, params, notify, scheduleDate, info.ttl, parentFinal, updateStikcersOrder, info.hasMediaSpoilers);
+                                        SendMessageParams sendMessageParams = SendMessageParams.of(photoFinal, null, dialogId, replyToMsg, replyToTopMsg, info.caption, info.entities, null, params, notify, scheduleDate, info.ttl, parentFinal, updateStikcersOrder, info.hasMediaSpoilers);
+                                        sendMessageParams.replyToStoryItem = storyItem;
+                                        sendMessageParams.replyQuote = quote;
+                                        sendMessageParams.quick_reply_shortcut = quickReplyShortcut;
+                                        sendMessageParams.quick_reply_shortcut_id = quickReplyShortcutId;
+                                        accountInstance.getSendMessagesHelper().sendMessage(sendMessageParams);
                                     }
                                 });
                             } else {
@@ -8080,7 +8530,7 @@ public class SendMessagesHelper extends BaseController implements NotificationCe
                         mediaCount = 0;
                     }
                     mediaCount++;
-                    int error = prepareSendingDocumentInternal(accountInstance, sendAsDocuments.get(a), sendAsDocumentsOriginal.get(a), sendAsDocumentsUri.get(a), extension, dialogId, replyToMsg, replyToTopMsg, sendAsDocumentsCaptions.get(a), sendAsDocumentsEntities.get(a), editingMessageObject, groupId2, mediaCount == 10 || a == documentsCount - 1, forceDocument, notify, scheduleDate, null);
+                    int error = prepareSendingDocumentInternal(accountInstance, sendAsDocuments.get(a), sendAsDocumentsOriginal.get(a), sendAsDocumentsUri.get(a), extension, dialogId, replyToMsg, replyToTopMsg, storyItem, quote, sendAsDocumentsEntities.get(a), editingMessageObject, groupId2, mediaCount == 10 || a == documentsCount - 1, sendAsDocumentsCaptions.get(a), notify, scheduleDate, null, forceDocument, quickReplyShortcut, quickReplyShortcutId);
                     handleError(error, accountInstance);
                 }
             }
@@ -8090,7 +8540,7 @@ public class SendMessagesHelper extends BaseController implements NotificationCe
         });
     }
 
-    private static void fillVideoAttribute(String videoPath, TLRPC.TL_documentAttributeVideo attributeVideo, VideoEditedInfo videoEditedInfo) {
+    public static void fillVideoAttribute(String videoPath, TLRPC.TL_documentAttributeVideo attributeVideo, VideoEditedInfo videoEditedInfo) {
         boolean infoObtained = false;
 
         MediaMetadataRetriever mediaMetadataRetriever = null;
@@ -8107,7 +8557,7 @@ public class SendMessagesHelper extends BaseController implements NotificationCe
             }
             String duration = mediaMetadataRetriever.extractMetadata(MediaMetadataRetriever.METADATA_KEY_DURATION);
             if (duration != null) {
-                attributeVideo.duration = (int) Math.ceil(Long.parseLong(duration) / 1000.0f);
+                attributeVideo.duration = Long.parseLong(duration) / 1000.0;
             }
             if (Build.VERSION.SDK_INT >= 17) {
                 String rotation = mediaMetadataRetriever.extractMetadata(MediaMetadataRetriever.METADATA_KEY_VIDEO_ROTATION);
@@ -8138,7 +8588,7 @@ public class SendMessagesHelper extends BaseController implements NotificationCe
             try {
                 MediaPlayer mp = MediaPlayer.create(ApplicationLoader.applicationContext, Uri.fromFile(new File(videoPath)));
                 if (mp != null) {
-                    attributeVideo.duration = (int) Math.ceil(mp.getDuration() / 1000.0f);
+                    attributeVideo.duration = mp.getDuration() / 1000.0;
                     attributeVideo.w = mp.getVideoWidth();
                     attributeVideo.h = mp.getVideoHeight();
                     mp.release();
@@ -8220,6 +8670,7 @@ public class SendMessagesHelper extends BaseController implements NotificationCe
             return null;
         }
 
+        long originalSize = new File(videoPath).length();
         int originalBitrate = MediaController.getVideoBitrate(videoPath);
         if (originalBitrate == -1) {
             originalBitrate = params[AnimatedFileDrawable.PARAM_NUM_BITRATE];
@@ -8329,11 +8780,13 @@ public class SendMessagesHelper extends BaseController implements NotificationCe
             videoEditedInfo.resultWidth = videoEditedInfo.originalWidth;
             videoEditedInfo.resultHeight = videoEditedInfo.originalHeight;
             videoEditedInfo.bitrate = bitrate;
+            videoEditedInfo.estimatedSize = originalSize;
         } else {
             videoEditedInfo.bitrate = bitrate;
+            int encoderBitrate = MediaController.extractRealEncoderBitrate(videoEditedInfo.resultWidth, videoEditedInfo.resultHeight, bitrate, false);
+            videoEditedInfo.estimatedSize = (long) (audioFramesSize + videoDuration / 1000.0f * encoderBitrate / 8);
         }
 
-        videoEditedInfo.estimatedSize = (long) (audioFramesSize + videoDuration / 1000.0f * bitrate / 8);
         if (videoEditedInfo.estimatedSize == 0) {
             videoEditedInfo.estimatedSize = 1;
         }
@@ -8342,7 +8795,7 @@ public class SendMessagesHelper extends BaseController implements NotificationCe
     }
 
     @UiThread
-    public static void prepareSendingVideo(AccountInstance accountInstance, String videoPath, VideoEditedInfo info, long dialogId, MessageObject replyToMsg, MessageObject replyToTopMsg, CharSequence caption, ArrayList<TLRPC.MessageEntity> entities, int ttl, MessageObject editingMessageObject, boolean notify, int scheduleDate, boolean forceDocument, boolean hasMediaSpoilers) {
+    public static void prepareSendingVideo(AccountInstance accountInstance, String videoPath, VideoEditedInfo info, long dialogId, MessageObject replyToMsg, MessageObject replyToTopMsg, TL_stories.StoryItem storyItem, ChatActivity.ReplyQuote quote, ArrayList<TLRPC.MessageEntity> entities, int ttl, MessageObject editingMessageObject, boolean notify, int scheduleDate, boolean forceDocument, boolean hasMediaSpoilers, CharSequence caption, String quickReplyShortcut, int quickReplyShortcutId) {
         if (videoPath == null || videoPath.length() == 0) {
             return;
         }
@@ -8382,7 +8835,12 @@ public class SendMessagesHelper extends BaseController implements NotificationCe
                     }
                 }
                 if (document == null) {
-                    thumb = createVideoThumbnailAtTime(videoPath, startTime);
+                    if (videoEditedInfo != null && videoEditedInfo.notReadyYet) {
+                        thumb = videoEditedInfo.thumb;
+                    }
+                    if (thumb == null) {
+                        thumb = createVideoThumbnailAtTime(videoPath, startTime);
+                    }
                     if (thumb == null) {
                         thumb = createVideoThumbnail(videoPath, MediaStore.Video.Thumbnails.MINI_KIND);
                     }
@@ -8419,21 +8877,26 @@ public class SendMessagesHelper extends BaseController implements NotificationCe
                         if (encryptedChat == null) {
                             return;
                         }
-                        attributeVideo = new TLRPC.TL_documentAttributeVideo();
+                        attributeVideo = new TLRPC.TL_documentAttributeVideo_layer159();
                     } else {
                         attributeVideo = new TLRPC.TL_documentAttributeVideo();
                         attributeVideo.supports_streaming = true;
                     }
                     attributeVideo.round_message = isRound;
                     document.attributes.add(attributeVideo);
-                    if (videoEditedInfo != null && videoEditedInfo.needConvert()) {
+                    if (videoEditedInfo != null && videoEditedInfo.notReadyYet) {
+                        attributeVideo.w = videoEditedInfo.resultWidth;
+                        attributeVideo.h = videoEditedInfo.resultHeight;
+                        attributeVideo.duration = videoEditedInfo.estimatedDuration / 1000.0;
+                        document.size = videoEditedInfo.estimatedSize;
+                    } else if (videoEditedInfo != null && videoEditedInfo.needConvert()) {
                         if (videoEditedInfo.muted) {
                             document.attributes.add(new TLRPC.TL_documentAttributeAnimated());
                             fillVideoAttribute(videoPath, attributeVideo, videoEditedInfo);
                             videoEditedInfo.originalWidth = attributeVideo.w;
                             videoEditedInfo.originalHeight = attributeVideo.h;
                         } else {
-                            attributeVideo.duration = (int) (videoEditedInfo.estimatedDuration / 1000);
+                            attributeVideo.duration = videoEditedInfo.estimatedDuration / 1000.0;
                         }
 
                         int w, h;
@@ -8489,12 +8952,145 @@ public class SendMessagesHelper extends BaseController implements NotificationCe
                     if (editingMessageObject != null) {
                         accountInstance.getSendMessagesHelper().editMessage(editingMessageObject, null, videoEditedInfo, videoFinal, finalPath, params, false, hasMediaSpoilers, parentFinal);
                     } else {
-                        accountInstance.getSendMessagesHelper().sendMessage(videoFinal, videoEditedInfo, finalPath, dialogId, replyToMsg, replyToTopMsg, captionFinal, entities, null, params, notify, scheduleDate, ttl, parentFinal, null, false, hasMediaSpoilers);
+                        SendMessageParams sendMessageParams = SendMessageParams.of(videoFinal, videoEditedInfo, finalPath, dialogId, replyToMsg, replyToTopMsg, captionFinal, entities, null, params, notify, scheduleDate, ttl, parentFinal, null, false, hasMediaSpoilers);
+                        sendMessageParams.replyToStoryItem = storyItem;
+                        sendMessageParams.replyQuote = quote;
+                        sendMessageParams.quick_reply_shortcut_id = quickReplyShortcutId;
+                        sendMessageParams.quick_reply_shortcut = quickReplyShortcut;
+                        accountInstance.getSendMessagesHelper().sendMessage(sendMessageParams);
                     }
                 });
             } else {
-                prepareSendingDocumentInternal(accountInstance, videoPath, videoPath, null, null, dialogId, replyToMsg, replyToTopMsg, caption, entities, editingMessageObject, null, false, forceDocument, notify, scheduleDate, null);
+                prepareSendingDocumentInternal(accountInstance, videoPath, videoPath, null, null, dialogId, replyToMsg, replyToTopMsg, storyItem, quote, entities, editingMessageObject, null, false, caption, notify, scheduleDate, null, forceDocument, quickReplyShortcut, quickReplyShortcutId);
             }
         }).start();
+    }
+
+    public static class SendMessageParams {
+        public String message;
+        public String caption;
+        public TLRPC.MessageMedia location;
+        public TLRPC.TL_photo photo;
+        public VideoEditedInfo videoEditedInfo;
+        public TLRPC.User user;
+        public TLRPC.TL_document document;
+        public TLRPC.TL_game game;
+        public TLRPC.TL_messageMediaPoll poll;
+        public TLRPC.TL_messageMediaInvoice invoice;
+        public TLRPC.TL_messageMediaWebPage mediaWebPage;
+        public long peer;
+        public String path;
+        public MessageObject replyToMsg;
+        public MessageObject replyToTopMsg;
+        public TLRPC.WebPage webPage;
+        public boolean searchLinks = true;
+        public MessageObject retryMessageObject;
+        public ArrayList<TLRPC.MessageEntity> entities;
+        public TLRPC.ReplyMarkup replyMarkup;
+        public HashMap<String, String> params;
+        public boolean notify;
+        public int scheduleDate;
+        public int ttl;
+        public Object parentObject;
+        public MessageObject.SendAnimationData sendAnimationData;
+        public boolean updateStickersOrder;
+        public boolean hasMediaSpoilers;
+        public TL_stories.StoryItem replyToStoryItem;
+        public TL_stories.StoryItem sendingStory;
+        public ChatActivity.ReplyQuote replyQuote;
+        public boolean invert_media;
+        public String quick_reply_shortcut;
+        public int quick_reply_shortcut_id;
+
+        public static SendMessageParams of(String string, long dialogId) {
+            return of(string, null, null, null, null, null, null, null, null, null, dialogId, null, null, null, null, true, null, null, null, null, false, 0, 0, null, null, false);
+        }
+
+        public static SendMessageParams of(MessageObject retryMessageObject) {
+            SendMessageParams params = of(null, null, null, null, null, null, null, null, null, null, retryMessageObject.getDialogId(), retryMessageObject.messageOwner.attachPath, null, null, null, true, retryMessageObject, null, retryMessageObject.messageOwner.reply_markup, retryMessageObject.messageOwner.params, !retryMessageObject.messageOwner.silent, retryMessageObject.scheduled ? retryMessageObject.messageOwner.date : 0, 0, null, null, false);
+            if (retryMessageObject.messageOwner != null) {
+                if (retryMessageObject.messageOwner.quick_reply_shortcut instanceof TLRPC.TL_inputQuickReplyShortcut) {
+                    params.quick_reply_shortcut = ((TLRPC.TL_inputQuickReplyShortcut) retryMessageObject.messageOwner.quick_reply_shortcut).shortcut;
+                }
+                params.quick_reply_shortcut_id = retryMessageObject.getQuickReplyId();
+            }
+            return params;
+        }
+
+        public static SendMessageParams of(TLRPC.User user, long peer, MessageObject replyToMsg, MessageObject replyToTopMsg, TLRPC.ReplyMarkup replyMarkup, HashMap<String, String> params, boolean notify, int scheduleDate) {
+            return of(null, null, null, null, null, user, null, null, null, null, peer, null, replyToMsg, replyToTopMsg, null, true, null, null, replyMarkup, params, notify, scheduleDate, 0, null, null, false);
+        }
+
+        public static SendMessageParams of(TLRPC.TL_messageMediaInvoice invoice, long peer, MessageObject replyToMsg, MessageObject replyToTopMsg, TLRPC.ReplyMarkup replyMarkup, HashMap<String, String> params, boolean notify, int scheduleDate) {
+            return of(null, null, null, null, null, null, null, null, null, invoice, peer, null, replyToMsg, replyToTopMsg, null, true, null, null, replyMarkup, params, notify, scheduleDate, 0, null, null, false);
+        }
+
+        public static SendMessageParams of(TLRPC.TL_document document, VideoEditedInfo videoEditedInfo, String path, long peer, MessageObject replyToMsg, MessageObject replyToTopMsg, String caption, ArrayList<TLRPC.MessageEntity> entities, TLRPC.ReplyMarkup replyMarkup, HashMap<String, String> params, boolean notify, int scheduleDate, int ttl, Object parentObject, MessageObject.SendAnimationData sendAnimationData, boolean updateStickersOrder) {
+            return of(null, caption, null, null, videoEditedInfo, null, document, null, null, null, peer, path, replyToMsg, replyToTopMsg, null, true, null, entities, replyMarkup, params, notify, scheduleDate, ttl, parentObject, sendAnimationData, updateStickersOrder);
+        }
+
+        public static SendMessageParams of(TLRPC.TL_document document, VideoEditedInfo videoEditedInfo, String path, long peer, MessageObject replyToMsg, MessageObject replyToTopMsg, String caption, ArrayList<TLRPC.MessageEntity> entities, TLRPC.ReplyMarkup replyMarkup, HashMap<String, String> params, boolean notify, int scheduleDate, int ttl, Object parentObject, MessageObject.SendAnimationData sendAnimationData, boolean updateStickersOrder, boolean hasMediaSpoilers) {
+            return of(null, caption, null, null, videoEditedInfo, null, document, null, null, null, peer, path, replyToMsg, replyToTopMsg, null, true, null, entities, replyMarkup, params, notify, scheduleDate, ttl, parentObject, sendAnimationData, updateStickersOrder, hasMediaSpoilers);
+        }
+
+        public static SendMessageParams of(String message, long peer, MessageObject replyToMsg, MessageObject replyToTopMsg, TLRPC.WebPage webPage, boolean searchLinks, ArrayList<TLRPC.MessageEntity> entities, TLRPC.ReplyMarkup replyMarkup, HashMap<String, String> params, boolean notify, int scheduleDate, MessageObject.SendAnimationData sendAnimationData, boolean updateStickersOrder) {
+            return of(message, null, null, null, null, null, null, null, null, null, peer, null, replyToMsg, replyToTopMsg, webPage, searchLinks, null, entities, replyMarkup, params, notify, scheduleDate, 0, null, sendAnimationData, updateStickersOrder);
+        }
+
+        public static SendMessageParams of(TLRPC.MessageMedia location, long peer, MessageObject replyToMsg, MessageObject replyToTopMsg, TLRPC.ReplyMarkup replyMarkup, HashMap<String, String> params, boolean notify, int scheduleDate) {
+            return of(null, null, location, null, null, null, null, null, null, null, peer, null, replyToMsg, replyToTopMsg, null, true, null, null, replyMarkup, params, notify, scheduleDate, 0, null, null, false);
+        }
+
+        public static SendMessageParams of(TLRPC.TL_messageMediaPoll poll, long peer, MessageObject replyToMsg, MessageObject replyToTopMsg, TLRPC.ReplyMarkup replyMarkup, HashMap<String, String> params, boolean notify, int scheduleDate) {
+            return of(null, null, null, null, null, null, null, null, poll, null, peer, null, replyToMsg, replyToTopMsg, null, true, null, null, replyMarkup, params, notify, scheduleDate, 0, null, null, false);
+        }
+
+        public static SendMessageParams of(TLRPC.TL_game game, long peer,  MessageObject replyToMsg, MessageObject replyToTopMsg, TLRPC.ReplyMarkup replyMarkup, HashMap<String, String> params, boolean notify, int scheduleDate) {
+            return of(null, null, null, null, null, null, null, game, null, null, peer, null, replyToMsg, replyToTopMsg, null, true, null, null, replyMarkup, params, notify, scheduleDate, 0, null, null, false);
+        }
+
+        public static SendMessageParams of(TLRPC.TL_photo photo, String path, long peer, MessageObject replyToMsg, MessageObject replyToTopMsg, String caption, ArrayList<TLRPC.MessageEntity> entities, TLRPC.ReplyMarkup replyMarkup, HashMap<String, String> params, boolean notify, int scheduleDate, int ttl, Object parentObject, boolean updateStickersOrder, boolean hasMediaSpoilers) {
+            return of(null, caption, null, photo, null, null, null, null, null, null, peer, path, replyToMsg, replyToTopMsg, null, true, null, entities, replyMarkup, params, notify, scheduleDate, ttl, parentObject, null, updateStickersOrder, hasMediaSpoilers);
+        }
+
+        public static SendMessageParams of(TLRPC.TL_photo photo, String path, long peer, MessageObject replyToMsg, MessageObject replyToTopMsg, String caption, ArrayList<TLRPC.MessageEntity> entities, TLRPC.ReplyMarkup replyMarkup, HashMap<String, String> params, boolean notify, int scheduleDate, int ttl, Object parentObject, boolean updateStickersOrder) {
+            return of(null, caption, null, photo, null, null, null, null, null, null, peer, path, replyToMsg, replyToTopMsg, null, true, null, entities, replyMarkup, params, notify, scheduleDate, ttl, parentObject, null, updateStickersOrder);
+        }
+
+        private static SendMessageParams of(String message, String caption, TLRPC.MessageMedia location, TLRPC.TL_photo photo, VideoEditedInfo videoEditedInfo, TLRPC.User user, TLRPC.TL_document document, TLRPC.TL_game game, TLRPC.TL_messageMediaPoll poll, TLRPC.TL_messageMediaInvoice invoice, long peer, String path, MessageObject replyToMsg, MessageObject replyToTopMsg, TLRPC.WebPage webPage, boolean searchLinks, MessageObject retryMessageObject, ArrayList<TLRPC.MessageEntity> entities, TLRPC.ReplyMarkup replyMarkup, HashMap<String, String> params, boolean notify, int scheduleDate, int ttl, Object parentObject, MessageObject.SendAnimationData sendAnimationData, boolean updateStickersOrder) {
+            return of(message, caption, location, photo, videoEditedInfo, user, document, game, poll, invoice, peer, path, replyToMsg, replyToTopMsg, webPage, searchLinks, retryMessageObject, entities, replyMarkup, params, notify, scheduleDate, ttl, parentObject, sendAnimationData, updateStickersOrder, false);
+        }
+
+        public static SendMessageParams of(String message, String caption, TLRPC.MessageMedia location, TLRPC.TL_photo photo, VideoEditedInfo videoEditedInfo, TLRPC.User user, TLRPC.TL_document document, TLRPC.TL_game game, TLRPC.TL_messageMediaPoll poll, TLRPC.TL_messageMediaInvoice invoice, long peer, String path, MessageObject replyToMsg, MessageObject replyToTopMsg, TLRPC.WebPage webPage, boolean searchLinks, MessageObject retryMessageObject, ArrayList<TLRPC.MessageEntity> entities, TLRPC.ReplyMarkup replyMarkup, HashMap<String, String> messageParams, boolean notify, int scheduleDate, int ttl, Object parentObject, MessageObject.SendAnimationData sendAnimationData, boolean updateStickersOrder, boolean hasMediaSpoilers) {
+            SendMessageParams params = new SendMessageParams();
+            params.message = message;
+            params.caption = caption;
+            params.location = location;
+            params.photo = photo;
+            params.videoEditedInfo = videoEditedInfo;
+            params.user = user;
+            params.document = document;
+            params.game = game;
+            params.poll = poll;
+            params.invoice = invoice;
+            params.peer = peer;
+            params.path = path;
+            params.replyToMsg = replyToMsg;
+            params.replyToTopMsg = replyToTopMsg;
+            params.webPage = webPage;
+            params.searchLinks = searchLinks;
+            params.retryMessageObject = retryMessageObject;
+            params.entities = entities;
+            params.replyMarkup = replyMarkup;
+            params.params = messageParams;
+            params.notify = notify;
+            params.scheduleDate = scheduleDate;
+            params.ttl = ttl;
+            params.parentObject = parentObject;
+            params.sendAnimationData = sendAnimationData;
+            params.updateStickersOrder = updateStickersOrder;
+            params.hasMediaSpoilers = hasMediaSpoilers;
+            return params;
+        }
     }
 }
