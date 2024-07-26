@@ -247,9 +247,6 @@ cpufeatures_LIB_DEPENDS:STATIC=general;dl;
 flac_LIB_DEPENDS:STATIC=
 
 //Dependencies for target
-lz4_LIB_DEPENDS:STATIC=
-
-//Dependencies for target
 mozjpeg_LIB_DEPENDS:STATIC=
 
 //Dependencies for target
@@ -277,7 +274,7 @@ tgnet_LIB_DEPENDS:STATIC=general;crypto;
 tgvoip_LIB_DEPENDS:STATIC=
 
 //Dependencies for the target
-tmessages.44_LIB_DEPENDS:STATIC=general;-Wl,--whole-archive;general;rnnoise;general;openh264;general;voipandroid;general;-Wl,--no-whole-archive;general;tgvoip;general;tgcalls;general;tgcalls_tp;general;mozjpeg;general;tgnet;general;lz4;general;webp;general;flac;general;rlottie;general;sqlite;general;swscale;general;avformat;general;avcodec;general;avresample;general;swresample;general;libvpx;general;avutil;general;ssl;general;crypto;general;jnigraphics;general;log;general;z;general;GLESv2;general;EGL;general;android;general;OpenSLES;general;cpufeatures;general;breakpad;
+tmessages.49_LIB_DEPENDS:STATIC=general;-Wl,--whole-archive;general;rnnoise;general;openh264;general;voipandroid;general;-Wl,--no-whole-archive;general;tgvoip;general;tgcalls;general;tgcalls_tp;general;mozjpeg;general;tgnet;general;webp;general;flac;general;rlottie;general;sqlite;general;swscale;general;avformat;general;avcodec;general;avresample;general;swresample;general;libvpx;general;avutil;general;ssl;general;crypto;general;jnigraphics;general;log;general;z;general;GLESv2;general;EGL;general;android;general;OpenSLES;general;cpufeatures;general;breakpad;
 
 //Dependencies for target
 voipandroid_LIB_DEPENDS:STATIC=
