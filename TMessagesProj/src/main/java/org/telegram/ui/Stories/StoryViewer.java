@@ -21,7 +21,7 @@ import android.graphics.RectF;
 import android.media.AudioManager;
 import android.net.Uri;
 import android.os.Build;
-import android.util.Log;
+import android.text.TextUtils;
 import android.util.LongSparseArray;
 import android.util.SparseArray;
 import android.view.GestureDetector;
@@ -50,7 +50,6 @@ import org.telegram.messenger.AndroidUtilities;
 import org.telegram.messenger.AnimationNotificationsLocker;
 import org.telegram.messenger.BotWebViewVibrationEffect;
 import org.telegram.messenger.BuildVars;
-import org.telegram.messenger.ChatObject;
 import org.telegram.messenger.DialogObject;
 import org.telegram.messenger.FileLoader;
 import org.telegram.messenger.FileLog;
@@ -71,6 +70,7 @@ import org.telegram.ui.ActionBar.BaseFragment;
 import org.telegram.ui.ActionBar.Theme;
 import org.telegram.ui.ArticleViewer;
 import org.telegram.ui.Cells.ChatActionCell;
+import org.telegram.ui.Cells.ChatMessageCell;
 import org.telegram.ui.Components.Bulletin;
 import org.telegram.ui.Components.CubicBezierInterpolator;
 import org.telegram.ui.Components.LayoutHelper;
@@ -455,7 +455,9 @@ public class StoryViewer implements NotificationCenter.NotificationCenterDelegat
                             if (swipeToReplyOffset > maxOffset && !swipeToReplyWaitingKeyboard) {
                                 swipeToReplyWaitingKeyboard = true;
                                 showKeyboard();
-                                windowView.performHapticFeedback(HapticFeedbackConstants.KEYBOARD_TAP);
+                                try {
+                                    windowView.performHapticFeedback(HapticFeedbackConstants.KEYBOARD_TAP);
+                                } catch (Exception ignored) {}
                             }
                             swipeToReplyProgress = Utilities.clamp(swipeToReplyOffset / maxOffset, 1f, 0);
                             if (storiesViewPager.getCurrentPeerView() != null) {
@@ -508,7 +510,9 @@ public class StoryViewer implements NotificationCenter.NotificationCenterDelegat
                     if (swipeToReplyOffset != 0 && storiesIntro == null) {
                         if (velocityY < -1000 && !swipeToReplyWaitingKeyboard) {
                             swipeToReplyWaitingKeyboard = true;
-                            windowView.performHapticFeedback(HapticFeedbackConstants.KEYBOARD_TAP);
+                            try {
+                                windowView.performHapticFeedback(HapticFeedbackConstants.KEYBOARD_TAP);
+                            } catch (Exception ignored) {}
                             showKeyboard();
                         }
                     }
@@ -726,13 +730,16 @@ public class StoryViewer implements NotificationCenter.NotificationCenterDelegat
                             if (isClosed && animateAvatar) {
                                 rect2.set(outFromRectAvatar);
                             } else {
-                                while (child != this) {
+                                while (child != this && child != null) {
                                     if (child.getParent() == this) {
                                         toX += child.getLeft();
                                         toY += child.getTop();
                                     } else if (child.getParent() != storiesViewPager) {
                                         toX += child.getX();
                                         toY += child.getY();
+                                    }
+                                    if (!(child.getParent() instanceof View)) {
+                                        break;
                                     }
                                     child = (View) child.getParent();
                                 }
@@ -959,8 +966,7 @@ public class StoryViewer implements NotificationCenter.NotificationCenterDelegat
                                     if ((int) (nowSeek * 10) != (int) (wasSeek * 10)) {
                                         try {
                                             peerView.performHapticFeedback(9, HapticFeedbackConstants.FLAG_IGNORE_VIEW_SETTING);
-                                        } catch (Exception ignore) {
-                                        }
+                                        } catch (Exception ignore) {}
                                     }
                                     peerView.storyContainer.invalidate();
                                     lastTouchX = x;
@@ -1058,7 +1064,7 @@ public class StoryViewer implements NotificationCenter.NotificationCenterDelegat
                     }
 
                     if (event != null && event.getKeyCode() == KeyEvent.KEYCODE_BACK && event.getAction() == KeyEvent.ACTION_UP) {
-                        onBackPressed();
+                        onAttachedBackPressed();
                         return true;
                     }
                     return super.dispatchKeyEventPreIme(event);
@@ -1332,9 +1338,7 @@ public class StoryViewer implements NotificationCenter.NotificationCenterDelegat
                         scope.player = null;
                         return;
                     }
-                    String lastAutority = lastUri == null ? null : lastUri.getAuthority();
-                    String autority = uri == null ? null : uri.getAuthority();
-                    boolean sameUri = Objects.equals(lastAutority, autority);
+                    boolean sameUri = TextUtils.equals(lastUri == null ? null : lastUri.toString(), uri == null ? null : uri.toString());
                     if (!sameUri || playerHolder == null) {
                         lastUri = uri;
                         if (playerHolder != null) {
@@ -1380,7 +1384,7 @@ public class StoryViewer implements NotificationCenter.NotificationCenterDelegat
                                 currentPlayerScope.firstFrameRendered = true;
                             }
                             FileLog.d("StoryViewer requestPlayer: currentPlayerScope.player start " + uri);
-                            currentPlayerScope.player.start(isPaused(), uri, t, isInSilentMode, currentSpeed);
+                            currentPlayerScope.player.start(false, isPaused(), uri, t, isInSilentMode, currentSpeed);
                             currentPlayerScope.invalidate();
                         } else {
                             FileLog.d("StoryViewer requestPlayer: url is null (1)");
@@ -1627,6 +1631,7 @@ public class StoryViewer implements NotificationCenter.NotificationCenterDelegat
                 });
                 containerView.setSystemUiVisibility(View.SYSTEM_UI_FLAG_LAYOUT_STABLE | View.SYSTEM_UI_FLAG_LAYOUT_FULLSCREEN | View.SYSTEM_UI_FLAG_LAYOUT_HIDE_NAVIGATION);
             }
+            AndroidUtilities.setPreferredMaxRefreshRate(windowManager, windowView, windowLayoutParams);
             windowManager.addView(windowView, windowLayoutParams);
         }
         windowView.requestLayout();
@@ -1955,6 +1960,9 @@ public class StoryViewer implements NotificationCenter.NotificationCenterDelegat
                 if (transitionViewHolder.view != null) {
                     int[] loc = new int[2];
                     transitionViewHolder.view.getLocationOnScreen(loc);
+                    if (transitionViewHolder.view instanceof ChatMessageCell) {
+                        loc[1] += transitionViewHolder.view.getPaddingTop();
+                    }
                     fromXCell = loc[0];
                     fromYCell = loc[1];
                     if (transitionViewHolder.view instanceof StoriesListPlaceProvider.AvatarOverlaysView) {
@@ -2444,8 +2452,8 @@ public class StoryViewer implements NotificationCenter.NotificationCenterDelegat
         MessagesController.getInstance(currentAccount).getStoriesController().stopAllPollers();
         if (ATTACH_TO_FRAGMENT) {
             lockOrientation(false);
-            if (fragment != null && fragment.sheetsStack != null) {
-                fragment.sheetsStack.remove(this);
+            if (fragment != null) {
+                fragment.removeSheet(this);
             }
         }
 
@@ -2482,12 +2490,17 @@ public class StoryViewer implements NotificationCenter.NotificationCenterDelegat
         return ColorUtils.blendARGB(currentColor, Color.BLACK, getBlackoutAlpha());
     }
 
+    @Override
+    public boolean isAttachedLightStatusBar() {
+        return false;
+    }
+
     private float getBlackoutAlpha() {
         return progressToOpen * (0.5f + 0.5f * (1f - progressToDismiss));
     }
 
     @Override
-    public boolean onBackPressed() {
+    public boolean onAttachedBackPressed() {
         if (selfStoriesViewsOffset != 0) {
             if (selfStoryViewsView.onBackPressed()) {
                 return true;

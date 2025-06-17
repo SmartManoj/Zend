@@ -89,8 +89,9 @@ public class PollCreateActivity extends BaseFragment implements NotificationCent
     private ChatActivity parentFragment;
     private HintView hintView;
 
-    private CharSequence[] answers = new CharSequence[10];
-    private boolean[] answersChecks = new boolean[10];
+    private final int maxAnswersCount = getMessagesController().pollAnswersMax;
+    private CharSequence[] answers = new CharSequence[maxAnswersCount];
+    private boolean[] answersChecks = new boolean[maxAnswersCount];
     private int answersCount = 1;
     private CharSequence questionString;
     private CharSequence solutionString;
@@ -227,9 +228,9 @@ public class PollCreateActivity extends BaseFragment implements NotificationCent
     public View createView(Context context) {
         actionBar.setBackButtonImage(R.drawable.ic_ab_back);
         if (quizOnly == 1) {
-            actionBar.setTitle(LocaleController.getString("NewQuiz", R.string.NewQuiz));
+            actionBar.setTitle(LocaleController.getString(R.string.NewQuiz));
         } else {
-            actionBar.setTitle(LocaleController.getString("NewPoll", R.string.NewPoll));
+            actionBar.setTitle(LocaleController.getString(R.string.NewPoll));
         }
         if (AndroidUtilities.isTablet()) {
             actionBar.setOccupyStatusBar(false);
@@ -274,7 +275,7 @@ public class PollCreateActivity extends BaseFragment implements NotificationCent
                     poll.poll.question = new TLRPC.TL_textWithEntities();
                     poll.poll.question.text = questionText.toString();
                     poll.poll.question.entities = questionEntities;
-                    SerializedData serializedData = new SerializedData(10);
+                    SerializedData serializedData = new SerializedData(maxAnswersCount);
                     for (int a = 0; a < answers.length; a++) {
                         if (TextUtils.isEmpty(ChatAttachAlertPollLayout.getFixedString(answers[a]))) {
                             continue;
@@ -329,7 +330,7 @@ public class PollCreateActivity extends BaseFragment implements NotificationCent
         });
 
         ActionBarMenu menu = actionBar.createMenu();
-        doneItem = menu.addItem(done_button, LocaleController.getString("Create", R.string.Create).toUpperCase());
+        doneItem = menu.addItem(done_button, LocaleController.getString(R.string.Create).toUpperCase());
 
         listAdapter = new ListAdapter(context);
 
@@ -605,7 +606,7 @@ public class PollCreateActivity extends BaseFragment implements NotificationCent
         });
 
         hintView = new HintView(context, 4);
-        hintView.setText(LocaleController.getString("PollTapToSelect", R.string.PollTapToSelect));
+        hintView.setText(LocaleController.getString(R.string.PollTapToSelect));
         hintView.setAlpha(0.0f);
         hintView.setVisibility(View.INVISIBLE);
         frameLayout.addView(hintView, LayoutHelper.createFrame(LayoutHelper.WRAP_CONTENT, LayoutHelper.WRAP_CONTENT, Gravity.LEFT | Gravity.TOP, 19, 0, 19, 0));
@@ -789,10 +790,10 @@ public class PollCreateActivity extends BaseFragment implements NotificationCent
         }
         if (!allowDiscard) {
             AlertDialog.Builder builder = new AlertDialog.Builder(getParentActivity());
-            builder.setTitle(LocaleController.getString("CancelPollAlertTitle", R.string.CancelPollAlertTitle));
-            builder.setMessage(LocaleController.getString("CancelPollAlertText", R.string.CancelPollAlertText));
-            builder.setPositiveButton(LocaleController.getString("PassportDiscard", R.string.PassportDiscard), (dialogInterface, i) -> finishFragment());
-            builder.setNegativeButton(LocaleController.getString("Cancel", R.string.Cancel), null);
+            builder.setTitle(LocaleController.getString(R.string.CancelPollAlertTitle));
+            builder.setMessage(LocaleController.getString(R.string.CancelPollAlertText));
+            builder.setPositiveButton(LocaleController.getString(R.string.PassportDiscard), (dialogInterface, i) -> finishFragment());
+            builder.setNegativeButton(LocaleController.getString(R.string.Cancel), null);
             showDialog(builder.create());
         }
         return allowDiscard;
@@ -1203,7 +1204,7 @@ public class PollCreateActivity extends BaseFragment implements NotificationCent
                     i = 0;
                 }
                 try {
-                    CharSequence localCharSequence = Emoji.replaceEmoji(symbol, editText.getPaint().getFontMetricsInt(), AndroidUtilities.dp(18), false);
+                    CharSequence localCharSequence = Emoji.replaceEmoji(symbol, editText.getPaint().getFontMetricsInt(), false);
                     editText.setText(editText.getText().insert(i, localCharSequence));
                     int j = i + localCharSequence.length();
                     editText.setSelection(j, j);
@@ -1243,10 +1244,10 @@ public class PollCreateActivity extends BaseFragment implements NotificationCent
             @Override
             public void onClearEmojiRecent() {
                 AlertDialog.Builder builder = new AlertDialog.Builder(getContext(), resourceProvider);
-                builder.setTitle(LocaleController.getString("ClearRecentEmojiTitle", R.string.ClearRecentEmojiTitle));
-                builder.setMessage(LocaleController.getString("ClearRecentEmojiText", R.string.ClearRecentEmojiText));
-                builder.setPositiveButton(LocaleController.getString("ClearButton", R.string.ClearButton), (dialogInterface, i) -> emojiView.clearRecentEmoji());
-                builder.setNegativeButton(LocaleController.getString("Cancel", R.string.Cancel), null);
+                builder.setTitle(LocaleController.getString(R.string.ClearRecentEmojiTitle));
+                builder.setMessage(LocaleController.getString(R.string.ClearRecentEmojiText));
+                builder.setPositiveButton(LocaleController.getString(R.string.ClearButton), (dialogInterface, i) -> emojiView.clearRecentEmoji());
+                builder.setNegativeButton(LocaleController.getString(R.string.Cancel), null);
                 builder.show();
             }
 
@@ -1283,15 +1284,15 @@ public class PollCreateActivity extends BaseFragment implements NotificationCent
                 case 0: {
                     HeaderCell cell = (HeaderCell) holder.itemView;
                     if (position == questionHeaderRow) {
-                        cell.setText(LocaleController.getString("PollQuestion", R.string.PollQuestion));
+                        cell.setText(LocaleController.getString(R.string.PollQuestion));
                     } else if (position == answerHeaderRow) {
                         if (quizOnly == 1) {
-                            cell.setText(LocaleController.getString("QuizAnswers", R.string.QuizAnswers));
+                            cell.setText(LocaleController.getString(R.string.QuizAnswers));
                         } else {
-                            cell.setText(LocaleController.getString("AnswerOptions", R.string.AnswerOptions));
+                            cell.setText(LocaleController.getString(R.string.AnswerOptions));
                         }
                     } else if (position == settingsHeaderRow) {
-                        cell.setText(LocaleController.getString("Settings", R.string.Settings));
+                        cell.setText(LocaleController.getString(R.string.Settings));
                     }
                     break;
                 }
@@ -1300,18 +1301,18 @@ public class PollCreateActivity extends BaseFragment implements NotificationCent
                     cell.setFixedSize(0);
                     cell.setBackgroundDrawable(Theme.getThemedDrawableByKey(mContext, R.drawable.greydivider_bottom, Theme.key_windowBackgroundGrayShadow));
                     if (position == solutionInfoRow) {
-                        cell.setText(LocaleController.getString("AddAnExplanationInfo", R.string.AddAnExplanationInfo));
+                        cell.setText(LocaleController.getString(R.string.AddAnExplanationInfo));
                     } else if (position == settingsSectionRow) {
                         if (quizOnly != 0) {
                             cell.setFixedSize(12);
                             cell.setText(null);
                         } else {
-                            cell.setText(LocaleController.getString("QuizInfo", R.string.QuizInfo));
+                            cell.setText(LocaleController.getString(R.string.QuizInfo));
                         }
-                    } else if (10 - answersCount <= 0) {
-                        cell.setText(LocaleController.getString("AddAnOptionInfoMax", R.string.AddAnOptionInfoMax));
+                    } else if (maxAnswersCount - answersCount <= 0) {
+                        cell.setText(LocaleController.getString(R.string.AddAnOptionInfoMax));
                     } else {
-                        cell.setText(LocaleController.formatString("AddAnOptionInfo", R.string.AddAnOptionInfo, LocaleController.formatPluralString("Option", 10 - answersCount)));
+                        cell.setText(LocaleController.formatString("AddAnOptionInfo", R.string.AddAnOptionInfo, LocaleController.formatPluralString("Option", maxAnswersCount - answersCount)));
                     }
                     break;
                 }
@@ -1323,19 +1324,19 @@ public class PollCreateActivity extends BaseFragment implements NotificationCent
                     drawable1.setColorFilter(new PorterDuffColorFilter(Theme.getColor(Theme.key_switchTrackChecked), PorterDuff.Mode.MULTIPLY));
                     drawable2.setColorFilter(new PorterDuffColorFilter(Theme.getColor(Theme.key_checkboxCheck), PorterDuff.Mode.MULTIPLY));
                     CombinedDrawable combinedDrawable = new CombinedDrawable(drawable1, drawable2);
-                    textCell.setTextAndIcon(LocaleController.getString("AddAnOption", R.string.AddAnOption), combinedDrawable, false);
+                    textCell.setTextAndIcon(LocaleController.getString(R.string.AddAnOption), combinedDrawable, false);
                     break;
                 }
                 case 6: {
                     TextCheckCell checkCell = (TextCheckCell) holder.itemView;
                     if (position == anonymousRow) {
-                        checkCell.setTextAndCheck(LocaleController.getString("PollAnonymous", R.string.PollAnonymous), anonymousPoll, multipleRow != -1 || quizRow != -1);
+                        checkCell.setTextAndCheck(LocaleController.getString(R.string.PollAnonymous), anonymousPoll, multipleRow != -1 || quizRow != -1);
                         checkCell.setEnabled(true, null);
                     } else if (position == multipleRow) {
-                        checkCell.setTextAndCheck(LocaleController.getString("PollMultiple", R.string.PollMultiple), multipleChoise, quizRow != -1);
+                        checkCell.setTextAndCheck(LocaleController.getString(R.string.PollMultiple), multipleChoise, quizRow != -1);
                         checkCell.setEnabled(true, null);
                     } else if (position == quizRow) {
-                        checkCell.setTextAndCheck(LocaleController.getString("PollQuiz", R.string.PollQuiz), quizPoll, false);
+                        checkCell.setTextAndCheck(LocaleController.getString(R.string.PollQuiz), quizPoll, false);
                         checkCell.setEnabled(quizOnly == 0, null);
                     }
                 }
@@ -1348,7 +1349,7 @@ public class PollCreateActivity extends BaseFragment implements NotificationCent
             if (viewType == 4) {
                 PollEditTextCell textCell = (PollEditTextCell) holder.itemView;
                 textCell.setTag(1);
-                textCell.setTextAndHint(questionString != null ? questionString : "", LocaleController.getString("QuestionHint", R.string.QuestionHint), false);
+                textCell.setTextAndHint(questionString != null ? questionString : "", LocaleController.getString(R.string.QuestionHint), false);
                 textCell.setTag(null);
                 setTextLeft(holder.itemView, holder.getAdapterPosition());
             } else if (viewType == 5) {
@@ -1356,7 +1357,7 @@ public class PollCreateActivity extends BaseFragment implements NotificationCent
                 PollEditTextCell textCell = (PollEditTextCell) holder.itemView;
                 textCell.setTag(1);
                 int index = position - answerStartRow;
-                textCell.setTextAndHint(answers[index], LocaleController.getString("OptionHint", R.string.OptionHint), true);
+                textCell.setTextAndHint(answers[index], LocaleController.getString(R.string.OptionHint), true);
                 textCell.setTag(null);
                 if (requestFieldFocusAtPosition == position) {
                     EditTextBoldCursor editText = textCell.getTextView();
@@ -1368,7 +1369,7 @@ public class PollCreateActivity extends BaseFragment implements NotificationCent
             } else if (viewType == 7) {
                 PollEditTextCell textCell = (PollEditTextCell) holder.itemView;
                 textCell.setTag(1);
-                textCell.setTextAndHint(solutionString != null ? solutionString : "", LocaleController.getString("AddAnExplanation", R.string.AddAnExplanation), false);
+                textCell.setTextAndHint(solutionString != null ? solutionString : "", LocaleController.getString(R.string.AddAnExplanation), false);
                 textCell.setTag(null);
                 setTextLeft(holder.itemView, holder.getAdapterPosition());
             }
@@ -1466,7 +1467,7 @@ public class PollCreateActivity extends BaseFragment implements NotificationCent
                                     for (ImageSpan span : spans) {
                                         s.removeSpan(span);
                                     }
-                                    Emoji.replaceEmoji(s, cell.getEditField().getPaint().getFontMetricsInt(), AndroidUtilities.dp(18), false);
+                                    Emoji.replaceEmoji(s, cell.getEditField().getPaint().getFontMetricsInt(), false);
 
                                     suggestEmojiPanel.setDirection(SuggestEmojiView.DIRECTION_TO_TOP);
                                     suggestEmojiPanel.setDelegate(cell);
@@ -1536,7 +1537,7 @@ public class PollCreateActivity extends BaseFragment implements NotificationCent
                                     for (ImageSpan span : spans) {
                                         s.removeSpan(span);
                                     }
-                                    Emoji.replaceEmoji(s, cell.getEditField().getPaint().getFontMetricsInt(), AndroidUtilities.dp(18), false);
+                                    Emoji.replaceEmoji(s, cell.getEditField().getPaint().getFontMetricsInt(), false);
 
                                     suggestEmojiPanel.setDirection(SuggestEmojiView.DIRECTION_TO_TOP);
                                     suggestEmojiPanel.setDelegate(cell);
@@ -1607,7 +1608,7 @@ public class PollCreateActivity extends BaseFragment implements NotificationCent
                             RecyclerView.ViewHolder holder = listView.findContainingViewHolder(this);
                             if (holder != null) {
                                 int position = holder.getAdapterPosition();
-                                if (answersCount == 10 && position == answerStartRow + answersCount - 1) {
+                                if (answersCount == maxAnswersCount && position == answerStartRow + answersCount - 1) {
                                     return false;
                                 }
                             }
@@ -1688,7 +1689,7 @@ public class PollCreateActivity extends BaseFragment implements NotificationCent
                                     for (ImageSpan span : spans) {
                                         s.removeSpan(span);
                                     }
-                                    Emoji.replaceEmoji(s, cell.getEditField().getPaint().getFontMetricsInt(), AndroidUtilities.dp(18), false);
+                                    Emoji.replaceEmoji(s, cell.getEditField().getPaint().getFontMetricsInt(), false);
                                     float y = holder.itemView.getY() - AndroidUtilities.dp(166) + holder.itemView.getMeasuredHeight();
                                     if (y > 0) {
                                         suggestEmojiPanel.setDirection(SuggestEmojiView.DIRECTION_TO_BOTTOM);
@@ -1717,7 +1718,7 @@ public class PollCreateActivity extends BaseFragment implements NotificationCent
                                 int position = holder.getAdapterPosition();
                                 if (position != RecyclerView.NO_POSITION) {
                                     int index = position - answerStartRow;
-                                    if (index == answersCount - 1 && answersCount < 10) {
+                                    if (index == answersCount - 1 && answersCount < maxAnswersCount) {
                                         addNewField();
                                     } else {
                                         if (index == answersCount - 1) {
